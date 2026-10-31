@@ -2005,7 +2005,7 @@ Screens.admin = ({ tab = 'support' } = {}) => ({
         <b>الأسعار</b>${f('base_fare', 'الأجرة الأساسية (جنيه)')}${f('per_km', 'سعر الكيلو (جنيه)')}</div>
         <div class="card col gap12"><b>الطرحة</b>${f('shared_capacity', 'عدد المقاعد في الركشة')}${f('shared_extra_pct', 'زيادة السواق لكل مجموعة إضافية (٪)')}</div>
         <div class="card col gap12"><b>الاشتراك</b>
-          <label class="row gap8" style="justify-content:space-between"><span>إلزام السواقين بالاشتراك</span><input type="checkbox" id="s_req" ${st.require_subscription ? 'checked' : ''} style="width:24px;height:24px"></label>
+          <label class="row gap8" style="justify-content:space-between"><span>إلزام السواقين بالاشتراك</span><input type="checkbox" class="switch" id="s_req" ${st.require_subscription ? 'checked' : ''}></label>
           ${f('subscription_price', 'سعر الاشتراك الشهري')}${f('bankak_account', 'رقم حساب بنكك', 'text')}${f('bankak_name', 'اسم صاحب الحساب', 'text')}</div>
         <button class="btn" id="saveSt">حفظ الإعدادات</button>`;
       $('#saveSt').onclick = async () => {

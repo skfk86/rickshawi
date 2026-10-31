@@ -71,6 +71,9 @@ a{color:var(--ink)}
 .map{position:absolute;inset:0;z-index:0;background:#EDF1EE}
 .sheet{position:absolute;left:0;right:0;bottom:0;background:var(--card);border-radius:28px 28px 0 0;box-shadow:0 -10px 30px rgba(15,26,20,.10);padding:10px 16px calc(var(--safe-bot) + 16px);display:flex;flex-direction:column;gap:12px;z-index:500;max-height:72%;overflow-y:auto}
 .sheet>*{flex-shrink:0}
+/* ما نخلي الأزرار والبطاقات تنضغط جوه القوائم الطويلة */
+.btn,.card,.field,.input,.doc,.list-btn,.route-box,.stat,.driver-item,.chip,.seg,.actions3,.empty,textarea{flex-shrink:0}
+.modal>*,.scroll>*{flex-shrink:0}
 .sheet{transition:max-height .25s ease}
 .sheet.collapsed{max-height:120px!important;overflow:hidden}
 .grab-hit{border:none;background:none;padding:6px 40px 10px;margin:-6px auto -4px;display:flex;justify-content:center;cursor:grab;align-self:center}
