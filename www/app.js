@@ -1437,7 +1437,11 @@ function setupNative() {
     if (!back()) P.App.exitApp();
   });
   P.App && P.App.addListener('appStateChange', ({ isActive }) => {
-    if (isActive && S.user && S.current) { const c = S.current; go(c.screen, c.params, { replace: true }); }
+    // نحدّث بس الشاشات اللحظية؛ شاشات النماذج ما نلمسها (فتح الكاميرا/المعرض بيخلي التطبيق في الخلفية)
+    const LIVE = ['waiting', 'tracking', 'driverTrip', 'driverHome', 'chat'];
+    if (isActive && S.user && S.current && LIVE.includes(S.current.screen) && !$('.overlay')) {
+      const c = S.current; go(c.screen, c.params, { replace: true });
+    }
   });
   P.Network && P.Network.addListener('networkStatusChange', (s) => { if (!s.connected) toast('ما في اتصال بالإنترنت', 'error'); });
 }
