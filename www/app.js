@@ -243,7 +243,15 @@ const timers = [];    // intervals للشاشة الحالية
 let cleanupFns = [];
 function onLeave(fn) { cleanupFns.push(fn); }
 function every(ms, fn) { const id = setInterval(fn, ms); timers.push(id); return id; }
-function channel(name) { const ch = sb.channel(name + ':' + Math.random().toString(36).slice(2)); subs.push(ch); return ch; }
+let navId = 0;
+// أي حدث لحظي بيوصل بعد ما المستخدم غيّر الشاشة بيتجاهل (كان بيرجّع المستخدم للشاشة القديمة)
+function channel(name) {
+  const id = navId;
+  const ch = sb.channel(name + ':' + Math.random().toString(36).slice(2));
+  const on = ch.on.bind(ch);
+  ch.on = (type, filter, cb) => { on(type, filter, (...x) => { if (navId === id) cb(...x); }); return ch; };
+  subs.push(ch); return ch;
+}
 function teardown() {
   subs.splice(0).forEach(ch => sb.removeChannel(ch));
   timers.splice(0).forEach(clearInterval);
@@ -251,6 +259,7 @@ function teardown() {
 }
 function go(screen, params = {}, opts = {}) {
   teardown();
+  navId++;
   if (opts.replace || opts.root) { if (opts.root) S.stack = []; else S.stack.pop(); }
   S.stack.push({ screen, params });
   S.current = { screen, params };
