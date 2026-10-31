@@ -316,7 +316,15 @@ async function findActiveTrip() {
   }
   const { data } = await sb.from('trips').select('*').eq('rider_id', uid)
     .in('status', ['requested', 'accepted', 'arriving', 'arrived', 'in_progress']).order('created_at', { ascending: false }).limit(1);
-  const t = data && data[0];
+  let t = data && data[0];
+  if (!t) {
+    const { data: jp } = await sb.from('trip_passengers').select('trip_id').eq('rider_id', uid).eq('status', 'joined').order('joined_at', { ascending: false }).limit(3);
+    if (jp && jp.length) {
+      const { data: jt } = await sb.from('trips').select('*').in('id', jp.map(x => x.trip_id))
+        .in('status', ['requested', 'accepted', 'arriving', 'arrived', 'in_progress']).order('created_at', { ascending: false }).limit(1);
+      if (jt && jt[0]) return jt[0];
+    }
+  }
   if (t && t.status === 'requested' && Date.now() - new Date(t.created_at) > 15 * 60000) {
     await rpc('set_trip_status', { p_trip: t.id, p_status: 'cancelled', p_reason: 'expired' }).catch(() => {});
     return null;
@@ -354,19 +362,60 @@ const STATUS_AR = {
 const STEP_IDX = { accepted: 1, arriving: 2, arrived: 3, in_progress: 4, completed: 4 };
 
 /* ---------- Driver location broadcaster (عالمي) ---------- */
+// بث موقع السواق: مراقبة مستمرة للـ GPS، بنرسل بس لما يتحرك أو كل ١٥ ثانية، ونتجاهل القراءات الضعيفة
 const Loc = {
-  id: null, watching: false,
-  start() {
-    if (this.id) return;
-    const tick = async () => {
-      const p = await getPos(true);
-      if (p && S.user) sb.rpc('update_my_location', { lat: p[0], lng: p[1] }).then(() => {});
+  watchId: null, lastSent: null, lastSentAt: 0, lastGoodAt: 0,
+  async start() {
+    if (this.watchId != null) return;
+    const onFix = (p) => {
+      if (!p || !p.coords) return;
+      const acc = p.coords.accuracy || 999, pos = [p.coords.latitude, p.coords.longitude], now = Date.now();
+      // قراءة ضعيفة: نقبلها بس لو ما جات قراءة كويسة من ٣٠ ثانية
+      if (acc > 60 && now - this.lastGoodAt < 30000) return;
+      if (acc <= 60) this.lastGoodAt = now;
+      lastPos = pos; lastAcc = acc;
+      document.dispatchEvent(new CustomEvent('rk-loc', { detail: { pos, acc } }));
+      const moved = !this.lastSent || haversineKm(this.lastSent, pos) > 0.015;
+      if ((moved && now - this.lastSentAt > 3000) || now - this.lastSentAt > 15000) {
+        this.lastSent = pos; this.lastSentAt = now;
+        if (S.user) sb.rpc('update_my_location', { lat: pos[0], lng: pos[1] }).then(() => {});
+      }
     };
-    tick();
-    this.id = setInterval(tick, C.DRIVER_LOCATION_INTERVAL_MS);
+    try {
+      if (isNative && P.Geolocation) {
+        const perm = await P.Geolocation.checkPermissions();
+        if (perm.location !== 'granted') await P.Geolocation.requestPermissions();
+        this.watchId = await P.Geolocation.watchPosition({ enableHighAccuracy: true, maximumAge: 3000, timeout: 20000 }, (p) => onFix(p));
+      } else {
+        this.watchId = navigator.geolocation.watchPosition(onFix, () => {}, { enableHighAccuracy: true, maximumAge: 3000 });
+      }
+    } catch (_) { toast('فعّل خدمة الموقع (GPS)', 'error'); }
   },
-  stop() { if (this.id) clearInterval(this.id); this.id = null; }
+  stop() {
+    if (this.watchId == null) return;
+    try { isNative && P.Geolocation ? P.Geolocation.clearWatch({ id: this.watchId }) : navigator.geolocation.clearWatch(this.watchId); } catch (_) {}
+    this.watchId = null; this.lastSent = null;
+  }
 };
+
+// تحريك العلامة بنعومة بدل القفز
+function animateMarker(mk, to, ms = 900) {
+  const from = mk.getLatLng(), t0 = performance.now();
+  if (Math.abs(from.lat - to[0]) < 1e-7 && Math.abs(from.lng - to[1]) < 1e-7) return;
+  if (haversineKm([from.lat, from.lng], to) > 1) return mk.setLatLng(to);
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / ms), e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    mk.setLatLng([from.lat + (to[0] - from.lat) * e, from.lng + (to[1] - from.lng) * e]);
+    if (k < 1 && mk._map) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+const priceIcon = (label, shared) => L.divIcon({
+  className: '', iconSize: [10, 10], iconAnchor: [0, 40],
+  html: `<div style="transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;width:max-content">
+    <div style="background:var(--ink);color:#fff;border-radius:12px;padding:5px 10px;font:600 12px 'Readex Pro';box-shadow:0 6px 16px rgba(15,26,20,.25);display:flex;align-items:center;gap:4px;direction:rtl">${shared ? icon('group', '', 'font-size:14px;color:var(--yellow)') : ''}${label}</div>
+    <div style="width:3px;height:10px;background:var(--ink)"></div><div style="width:12px;height:12px;border-radius:50%;background:var(--blue);border:3px solid #fff;margin-top:-2px"></div></div>`
+});
 
 /* ---------- رسم المسار لحظياً ---------- */
 function routeFollower(map) {
@@ -554,6 +603,10 @@ Screens.riderHome = () => {
         pickup = p;
         if (!meMk) {
           meMk = L.marker(p, { icon: meIcon(), zIndexOffset: 1000, draggable: true }).addTo(map);
+          if (lastAcc && lastAcc > 15) {
+            const c = L.circle(p, { radius: Math.min(lastAcc, 300), color: '#2E90FA', weight: 1, fillOpacity: .08, interactive: false }).addTo(map);
+            meMk.on('dragstart', () => c.remove());
+          }
           meMk.on('dragend', () => { const ll = meMk.getLatLng(); setPickup([ll.lat, ll.lng]); if (dest) setDest(dest); });
         } else meMk.setLatLng(p);
         pickupAddr = await reverse(p[0], p[1]);
@@ -580,7 +633,9 @@ Screens.riderHome = () => {
       setTimeout(loadDrivers, 600);
       every(10000, loadDrivers);
 
-      let routeLine = null, routeMin = 0;
+      let routeLine = null, routeMin = 0, shared = false, seats = 1, openShared = [];
+      const cap = () => S.settings?.shared_capacity || 4;
+      const pct = () => (S.settings?.shared_extra_pct ?? 25) / 100;
       const setDest = async (d) => {
         dest = d;
         if (!destMk) destMk = L.marker([d.lat, d.lng], { icon: destIcon() }).addTo(map); else destMk.setLatLng([d.lat, d.lng]);
@@ -594,6 +649,9 @@ Screens.riderHome = () => {
         routeLine = L.polyline(r.coords, { color: '#0F1A14', weight: 5, opacity: .85 }).addTo(map);
         map.fitBounds(routeLine.getBounds().pad(0.3), { paddingBottomRight: [0, 280] });
         renderBottom();
+        const { data: os } = await sb.rpc('open_shared_trips', { plat: pickup[0], plng: pickup[1], dlat: d.lat, dlng: d.lng });
+        if (map._dead) return;
+        openShared = os || []; renderBottom();
       };
       map.on('click', async (e) => {
         if (!pickup) return;
@@ -625,7 +683,24 @@ Screens.riderHome = () => {
               <span class="small muted row gap4">${icon('star', 'f', 'font-size:14px;color:var(--star)')}${num(d.rating_avg || 5)} · ${num(etaMin(d.distance_m))} د · ${distStr(d.distance_m)}</span></span>
             ${d.plate_number ? `<span class="plate"><span>السودان</span><span>${esc(d.plate_number)}</span></span>` : ''}</div>`).join('');
         if (!dest) { b.innerHTML = near + (list ? `<div class="col gap8">${list}</div><p class="small muted" style="margin:0;text-align:center">اكتب وجهتك عشان تشوف السعر وتطلب</p>` : ''); return; }
+        const joinCards = openShared.map((o, i) => {
+          const used = cap() - o.seats_left, est = Math.round(o.price * (1 + pct() * o.groups) / (used + 1) / 100) * 100;
+          return `<div class="card col gap8" style="border:2px solid var(--yellow);padding:12px">
+            <div class="row gap8">${icon('group', 'f', 'color:#7A5A00')}<b class="grow">طرحة ماشية لـ ${esc(o.dropoff_address || 'نفس الاتجاه')}</b><span class="pill yellow">باقي ${num(o.seats_left)}</span></div>
+            <span class="small muted">${o.driver_name ? 'السواق ' + esc(o.driver_name) + ' · ' : ''}نقطة التجمع على بعد ${distStr(o.pickup_away_m)}</span>
+            <div class="row" style="justify-content:space-between"><span class="small">نصيبك حوالي <b style="font-size:17px">${money(est)}</b> <span class="muted">بدل ${money(price)}</span></span>
+              <button class="btn sm yellow" data-join="${i}" style="width:auto;padding:0 18px">انضم</button></div></div>`;
+        }).join('');
+        const shareEst = Math.round(price * (1 + pct()) / (seats + 1) * seats / 100) * 100;
         b.innerHTML = `${near}
+          ${joinCards ? `<b style="font-size:15px">طرحات ماشية لنفس الاتجاه</b>${joinCards}<div class="row gap8 small muted" style="justify-content:center">— أو اطلب ركشة —</div>` : ''}
+          <div class="card col gap8" style="background:${shared ? 'var(--yellow-soft)' : '#F4F6F5'};padding:12px">
+            <label class="row gap8" style="cursor:pointer">${icon('group', shared ? 'f' : '', 'color:#7A5A00')}<span class="col grow"><b style="font-size:15px">طرحة — شارك الركشة</b><span class="small muted">ركاب تانيين ماشين نفس الاتجاه بينضموا وتقسموا المبلغ</span></span>
+              <input type="checkbox" id="shareTg" ${shared ? 'checked' : ''} style="width:24px;height:24px;accent-color:#0F1A14"></label>
+            ${shared ? `<div class="row" style="justify-content:space-between"><span class="small">إنتو كم شخص؟</span>
+              <div class="stepper"><button id="sMinus" aria-label="أقل">${icon('remove')}</button><b style="min-width:30px;text-align:center">${num(seats)}</b><button id="sPlus" aria-label="أكتر">${icon('add')}</button></div></div>
+              <span class="small">لو انضم ليكم راكب واحد بس، نصيبكم بينزل لحوالي <b>${money(shareEst)}</b></span>` : ''}
+          </div>
           <div class="card row" style="background:#F4F6F5;justify-content:space-between">
             <div class="col"><span class="small muted">${num(km.toFixed(1))} كم بالشوارع · حوالي ${num(routeMin)} دقيقة</span><span class="small muted">السواقين ممكن يقترحوا سعر تاني</span></div>
             <div class="stepper"><button id="minus" aria-label="نقّص السعر">${icon('remove')}</button>
@@ -634,9 +709,18 @@ Screens.riderHome = () => {
           </div>
           <div class="row gap8">
             <span class="btn ghost" style="width:96px;font-size:14px">${icon('payments', '', 'color:var(--green)')}كاش</span>
-            <button class="btn" id="reqBtn" style="justify-content:space-between"><span>اطلب ركشة</span><span class="row gap4" style="color:var(--yellow)">${money(price)}${icon('arrow_back')}</span></button>
+            <button class="btn" id="reqBtn" style="justify-content:space-between"><span>${shared ? 'اطلب طرحة' : 'اطلب ركشة'}</span><span class="row gap4" style="color:var(--yellow)">${money(price)}${icon('arrow_back')}</span></button>
           </div>`;
         const step = Math.max(100, Math.round(suggestPrice(km) * 0.05 / 100) * 100);
+        $('#shareTg').onchange = (e) => { shared = e.target.checked; renderBottom(); };
+        $('#sMinus') && ($('#sMinus').onclick = () => { seats = Math.max(1, seats - 1); renderBottom(); });
+        $('#sPlus') && ($('#sPlus').onclick = () => { seats = Math.min(cap() - 1, seats + 1); renderBottom(); });
+        $$('[data-join]').forEach(btn => btn.onclick = async () => {
+          const o = openShared[+btn.dataset.join];
+          btn.disabled = true;
+          const ok = await safe(() => rpc('join_shared_trip', { p_trip: o.id, p_seats: 1, plat: pickup[0], plng: pickup[1], paddr: pickupAddr, dlat: dest.lat, dlng: dest.lng, daddr: dest.name }), 'انضميت للطرحة!');
+          if (ok !== undefined) { haptic(); go(o.status === 'requested' ? 'waiting' : 'tracking', { id: o.id }, { root: true }); } else btn.disabled = false;
+        });
         $('#minus').onclick = () => { price = Math.max(Math.round(suggestPrice(km) * 0.7 / 100) * 100, price - step); renderBottom(); };
         $('#plus').onclick = () => { price += step; renderBottom(); };
         $('#reqBtn').onclick = async (ev) => {
@@ -648,6 +732,7 @@ Screens.riderHome = () => {
               distance_km: +km.toFixed(2), offered_price: price
             }).select().single();
             if (error) throw error;
+            if (shared) await rpc('make_trip_shared', { p_trip: data.id, p_seats: seats });
             return data;
           });
           if (trip) { haptic(); go('waiting', { id: trip.id }, { root: true }); }
@@ -669,7 +754,8 @@ Screens.waiting = ({ id }) => ({
         <h2 class="h1" style="font-size:22px;margin-top:20px">بنرسل طلبك للركشات القريبة</h2>
         <p class="muted" style="margin:0" id="tripInfo">…</p>
       </div>
-      <div class="row" style="justify-content:space-between"><b>عروض السواقين</b><span class="small muted" id="offCount"></span></div>
+      <div id="wShares"></div>
+      <div class="row" style="justify-content:space-between" id="offHead"><b>عروض السواقين</b><span class="small muted" id="offCount"></span></div>
       <div id="offers" class="col gap8"><div class="empty" style="padding:20px">${icon('hourglass_top')}<span>العروض بتظهر هنا أول ما سواق يرد</span></div></div>
     </div>
     <div class="pad" style="padding-bottom:calc(var(--safe-bot) + 16px)"><button class="btn danger" id="cancel">${icon('close')}إلغاء الطلب</button></div>
@@ -678,7 +764,26 @@ Screens.waiting = ({ id }) => ({
     const trip = await safe(() => getTrip(id));
     if (!trip) return home();
     if (trip.status !== 'requested') return routeToActive();
-    $('#tripInfo').textContent = `${trip.dropoff_address || 'وجهتك'} · عرضك ${money(trip.offered_price)}`;
+    const owner = trip.rider_id === S.user.id;
+    $('#tripInfo').textContent = `${trip.dropoff_address || 'وجهتك'} · ${owner ? 'عرضك ' + money(trip.offered_price) : 'طرحة'}`;
+    const paintShares = async () => { if (!trip.is_shared) return; const sh = await loadShares(id); if ($('#wShares')) $('#wShares').innerHTML = sharesHtml(sh); };
+    paintShares();
+    if (trip.is_shared) channel('wsh').on('postgres_changes', { event: '*', schema: 'public', table: 'trip_passengers', filter: `trip_id=eq.${id}` }, () => { haptic(); paintShares(); }).subscribe();
+    if (!owner) {
+      $('#offHead').remove();
+      $('#offers').innerHTML = `<div class="card row gap8" style="background:#F4F6F5">${icon('hourglass_top', '', 'color:var(--ink3)')}<span class="small">منتظرين صاحب الطلب يختار سواق. أول ما سواق يقبل بنوريك مكانه.</span></div>`;
+      $('#cancel').innerHTML = `${icon('logout')}انسحاب من الطرحة`;
+      $('#cancel').onclick = async () => {
+        if (!(await confirmBox('تنسحب من الطرحة؟', 'مكانك بيتفتح لراكب تاني.', 'انسحاب', true))) return;
+        const ok = await safe(() => rpc('leave_shared_trip', { p_trip: id }));
+        if (ok !== undefined) home();
+      };
+      channel('wj').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'trips', filter: `id=eq.${id}` }, (p) => {
+        if (p.new.status === 'accepted') { haptic(); toast('سواق قبل الطرحة!', 'success'); go('tracking', { id }, { root: true }); }
+        if (p.new.status === 'cancelled') { toast('صاحب الطلب لغى الطرحة', 'error'); home(); }
+      }).subscribe();
+      return;
+    }
     const cache = {};
     const loadOffers = async () => {
       const { data } = await sb.from('trip_offers').select('*').eq('trip_id', id).eq('status', 'pending').order('price');
@@ -723,6 +828,28 @@ Screens.waiting = ({ id }) => ({
   }
 });
 
+/* ---------- الطرحة: قائمة الركاب ونصيب كل واحد ---------- */
+async function loadShares(tripId) {
+  const { data } = await sb.rpc('trip_shares', { p_trip: tripId });
+  return data || [];
+}
+function sharesHtml(shares, opts = {}) {
+  if (!shares.length) return '';
+  const me = shares.find(x => x.rider_id === S.user.id);
+  const seats = shares.reduce((a, x) => a + x.seats, 0);
+  return `<div class="card col gap8" style="background:var(--yellow-soft)">
+    <div class="row gap8">${icon('group', 'f', 'color:#7A5A00')}<b class="grow">طرحة · ${num(seats)} ${seats > 2 ? 'ركاب' : 'راكب'}</b>
+      ${me && !opts.driver ? `<span class="small">نصيبك <b style="font-size:16px">${money(me.share)}</b></span>` : `<span class="small">الإجمالي <b style="font-size:16px">${money(shares[0].total)}</b></span>`}</div>
+    ${shares.map(x => `<div class="row gap8 small" style="border-top:1px dashed rgba(122,90,0,.25);padding-top:6px">
+      <span class="avatar" style="width:30px;height:30px;font-size:13px;border-radius:10px">${initial(x.full_name)}</span>
+      <span class="col grow" style="min-width:0"><b>${esc(x.rider_id === S.user.id ? 'إنت' : x.full_name || 'راكب')}${x.seats > 1 ? ` (+${num(x.seats - 1)})` : ''}</b>
+        ${opts.driver ? `<span class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${icon('trip_origin', '', 'font-size:12px;color:var(--blue)')} ${esc(x.pickup_address || '')} ← ${esc(x.dropoff_address || '')}</span>` : ''}</span>
+      ${opts.driver && x.phone ? `<a class="icon-btn" href="tel:${esc(x.phone)}" aria-label="اتصال" style="width:34px;height:34px;background:#fff">${icon('call', '', 'font-size:18px')}</a>` : ''}
+      <b>${money(x.share)}</b></div>`).join('')}
+    <span class="small muted">كل مجموعة إضافية بتزيد الإجمالي ${num(S.settings?.shared_extra_pct ?? 25)}٪ للسواق، والمبلغ بيتقسم على عدد الركاب</span>
+  </div>`;
+}
+
 /* ---------- Shared: unread chat counter ---------- */
 async function unreadCount(tripId) {
   const { count } = await sb.from('messages').select('id', { count: 'exact', head: true })
@@ -759,7 +886,7 @@ Screens.tracking = ({ id }) => {
       const updDriver = async (loc) => {
         if (!loc || map._dead) return;
         drv._loc = loc;
-        if (!drvMk) drvMk = L.marker(loc, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map); else drvMk.setLatLng(loc);
+        if (!drvMk) drvMk = L.marker(loc, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map); else animateMarker(drvMk, loc);
         const target = trip.status === 'in_progress' ? trip._dropoff : trip._pickup;
         const r = await rf.update(loc, target);
         if (r && $('#eta')) $('#eta').textContent = trip.status === 'arrived' ? '' : `${num(r.min)} د · ${num(r.km.toFixed(1))} كم`;
@@ -788,13 +915,18 @@ Screens.tracking = ({ id }) => {
             <button class="act" id="shareBtn">${icon('shield_person')}شارك الرحلة</button>
           </div>
           ${trip.status === 'in_progress' ? meterHtml(trip, +trip.traveled_km || 0) : ''}
+          ${trip.is_shared ? sharesHtml(await loadShares(id)) : ''}
           <div class="row gap8 card" style="background:#F4F6F5">${icon('flag', '', 'color:var(--ink3)')}<span class="grow" style="font-size:14px">${esc(trip.dropoff_address || 'الوجهة')}</span><b class="row gap4">${icon('payments', '', 'font-size:18px;color:var(--green)')}${money(trip.final_price || trip.offered_price)}</b></div>
-          <div class="row gap8">${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon('close')}إلغاء المشوار</button>` : ''}
+          <div class="row gap8">${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon(trip.rider_id === S.user.id ? 'close' : 'logout')}${trip.rider_id === S.user.id ? 'إلغاء المشوار' : 'انسحاب'}</button>` : ''}
             <button class="btn danger" id="reportBtn" style="color:var(--ink3)">${icon('flag')}إبلاغ</button></div>`;
         $('#chatBtn').onclick = () => go('chat', { id });
         $('#reportBtn').onclick = () => openReport({ tripId: id, reportedId: trip.driver_id, reportedName: drv.full_name });
+        if (trip.rider_id !== S.user.id && $('#cancelBtn')) $('#cancelBtn').onclick = async () => {
+          if (!(await confirmBox('تنسحب من الطرحة؟', 'السواق والركاب التانيين بيكملوا من غيرك.', 'انسحاب', true))) return;
+          const ok = await safe(() => rpc('leave_shared_trip', { p_trip: id })); if (ok !== undefined) home();
+        };
         $('#shareBtn').onclick = () => shareTrip(trip, drv);
-        $('#cancelBtn') && ($('#cancelBtn').onclick = async () => {
+        trip.rider_id === S.user.id && $('#cancelBtn') && ($('#cancelBtn').onclick = async () => {
           if (!(await confirmBox('تلغي المشوار؟', 'السواق جاي في الطريق ليك. لو لغيت كتير تقييمك ممكن يتأثر.', 'إلغاء', true))) return;
           const ok = await safe(() => rpc('set_trip_status', { p_trip: id, p_status: 'cancelled', p_reason: 'rider_cancel' }));
           if (ok !== undefined) home();
@@ -811,7 +943,8 @@ Screens.tracking = ({ id }) => {
         }
         if (prev !== trip.status) { haptic(); if (trip.status === 'arrived') toast('الركشة وصلت! السواق منتظرك', 'success'); }
         render(); updDriver(drv._loc);
-      }).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'drivers', filter: `id=eq.${trip.driver_id}` }, (p) => {
+      }).on('postgres_changes', { event: '*', schema: 'public', table: 'trip_passengers', filter: `trip_id=eq.${id}` }, () => { if (trip.is_shared) render(); })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'drivers', filter: `id=eq.${trip.driver_id}` }, (p) => {
         updDriver(parsePoint(p.new.location));
       }).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `trip_id=eq.${id}` }, (p) => {
         if (p.new.sender_id !== S.user.id) { haptic(); toast('رسالة جديدة من السواق'); render(); }
@@ -870,7 +1003,7 @@ Screens.chat = ({ id }) => {
       $('#sendLoc').onclick = async () => { const p = await getPos(); await readyP; send('ده موقعي، تعال عليه مباشرة', p); };
       trip = await safe(() => getTrip(id));
       if (!trip) return back();
-      const otherId = trip.rider_id === S.user.id ? trip.driver_id : trip.rider_id;
+      const otherId = trip.driver_id === S.user.id ? trip.rider_id : trip.driver_id;
       other = otherId === trip.driver_id ? await getDriverPublic(otherId) : await getProfile(otherId);
       $('#cName').textContent = other.full_name || '';
       $('#cAv').innerHTML = other.avatar_url ? `<img src="${esc(other.avatar_url)}" alt="">` : initial(other.full_name);
@@ -939,17 +1072,19 @@ Screens.rating = ({ id }) => {
     async mount() {
       const trip = await safe(() => getTrip(id));
       if (!trip) return home();
-      const iAmRider = trip.rider_id === S.user.id;
+      const iAmRider = trip.driver_id !== S.user.id;
       const otherId = iAmRider ? trip.driver_id : trip.rider_id;
       const o = await getProfile(otherId);
       if (!iAmRider) { $('#rTitle').textContent = 'المشوار اكتمل'; }
       $('#rName').textContent = (o.full_name || '') + '؟';
       $('#rAv').innerHTML = initial(o.full_name);
       $('#rSub').textContent = `${trip.dropoff_address || ''} · ${trip.completed_at ? timeStr(trip.completed_at) : ''}`;
+      let pay = trip.final_price;
+      if (trip.is_shared) { const sh = await loadShares(id); const me = sh.find(x => x.rider_id === S.user.id); pay = iAmRider && me ? me.share : (sh[0]?.total || pay); }
       const mins = trip.completed_at && trip.accepted_at ? Math.round((new Date(trip.completed_at) - new Date(trip.accepted_at)) / 60000) : null;
       $('#rStats').innerHTML = `<div class="col"><span class="small muted">المسافة</span><b>${num((+trip.traveled_km > 0 ? +trip.traveled_km : +trip.distance_km || 0).toFixed(1))} كم</b></div>
         <div class="col" style="border-inline:1px solid var(--line)"><span class="small muted">الزمن</span><b>${mins != null ? num(mins) + ' د' : '—'}</b></div>
-        <div class="col"><span class="small muted">${iAmRider ? 'ادفع كاش' : 'استلم كاش'}</span><b>${money(trip.final_price)}</b></div>`;
+        <div class="col"><span class="small muted">${iAmRider ? (trip.is_shared ? 'نصيبك كاش' : 'ادفع كاش') : 'استلم كاش'}</span><b>${money(pay)}</b></div>`;
       const paint = () => {
         $$('[data-s]').forEach(b => { const on = +b.dataset.s <= stars; $('.ms', b).classList.toggle('on', on); b.setAttribute('aria-checked', +b.dataset.s === stars); });
         $('#sLabel').textContent = LABELS[stars];
@@ -988,7 +1123,13 @@ Screens.history = ({ filter = 'all' } = {}) => ({
     bindNav(root);
     $$('[data-f]').forEach(b => b.onclick = () => go('history', { filter: b.dataset.f }, { replace: true }));
     const col = S.mode === 'driver' ? 'driver_id' : 'rider_id';
-    let q = sb.from('trips').select('*').eq(col, S.user.id).order('created_at', { ascending: false }).limit(60);
+    let q = sb.from('trips').select('*').order('created_at', { ascending: false }).limit(60);
+    if (S.mode === 'driver') q = q.eq(col, S.user.id);
+    else {
+      const { data: jp } = await sb.from('trip_passengers').select('trip_id').eq('rider_id', S.user.id).eq('status', 'joined').limit(60);
+      const ids = (jp || []).map(x => x.trip_id);
+      q = ids.length ? q.or(`rider_id.eq.${S.user.id},id.in.(${ids.join(',')})`) : q.eq('rider_id', S.user.id);
+    }
     q = filter === 'all' ? q.in('status', ['completed', 'cancelled']) : q.eq('status', filter);
     const { data } = await q;
     const trips = data || [];
@@ -1168,32 +1309,47 @@ Screens.driverSignup = () => {
 
 /* ---------- Driver: Home (requests) ---------- */
 Screens.driverHome = () => {
-  let map, meMk;
+  let map, meMk, accCircle;
   const reqLayer = L.layerGroup();
   return {
-    html: `<div class="screen" style="background:#111A15">
-      <div id="map" class="map" style="bottom:45%"></div>
+    html: `<div class="screen">
+      <div id="map" class="map"></div>
       <div class="map-top" style="justify-content:space-between">
-        <div class="col" style="background:rgba(15,26,20,.85);color:#fff;border-radius:16px;padding:8px 14px"><span class="small" style="color:#A9B5AE" id="todayLbl">دخل اليوم</span><b style="font-size:19px" id="today">…</b></div>
-        <button id="onlineBtn" aria-pressed="false" style="display:flex;align-items:center;gap:10px;border:none;border-radius:999px;padding:6px 6px 6px 16px;font-size:14px;font-weight:600;color:#fff;background:#5B6660"><span id="onLbl">غير متاح</span><span style="width:34px;height:34px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center">${icon('power_settings_new', '', 'font-size:20px;color:#5B6660')}</span></button>
+        <div class="loc-box" style="flex:0 1 auto;height:auto;padding:8px 14px;flex-direction:column;align-items:flex-start;gap:0">
+          <span class="small muted" id="todayLbl">دخل اليوم</span><b style="font-size:18px" id="today">…</b></div>
+        <button id="onlineBtn" aria-pressed="false" style="display:flex;align-items:center;gap:10px;border:none;border-radius:999px;padding:6px 6px 6px 16px;font-size:14px;font-weight:600;color:#fff;background:#5B6660;box-shadow:0 4px 16px rgba(15,26,20,.18)"><span id="onLbl">غير متاح</span><span style="width:36px;height:36px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center">${icon('power_settings_new', '', 'font-size:20px;color:#5B6660')}</span></button>
       </div>
-      <div class="sheet" style="max-height:58%;min-height:45%"><div class="grab"></div>
-        <div class="row" style="justify-content:space-between"><h2 style="margin:0;font-size:19px">طلبات قريبة</h2><span class="small muted" id="reqCount"></span></div>
+      <button class="icon-btn float" id="dRecenter" aria-label="موقعي" style="position:absolute;right:16px;bottom:calc(36% + 16px);z-index:500;border-radius:50%;width:48px;height:48px">${icon('my_location')}</button>
+      <div class="sheet" id="dSheet" style="max-height:36%"><div class="grab"></div>
+        <div class="row" style="justify-content:space-between"><h2 style="margin:0;font-size:18px">طلبات قريبة</h2><span class="small muted row gap4" id="reqCount"></span></div>
         <div id="reqs" class="col gap8"></div></div>
       </div>${nav('driverHome')}`,
     async mount(root) {
       bindNav(root);
       if (S.driver?.status !== 'approved') { await setMode('rider'); return home(); }
-      map = makeMap($('#map'), lastPos || C.DEFAULT_CENTER, 15);
+      map = makeMap($('#map'), lastPos || C.DEFAULT_CENTER, 16);
       reqLayer.addTo(map);
       onLeave(() => { map._dead = true; try { map.stop(); map.off(); map.remove(); } catch (_) {} });
-      const p = await getPos(); if (map._dead) return; map.setView(p, 15);
+      const p = await getPos(); if (map._dead) return;
+      map.setView(p, 16, { animate: false });
       meMk = L.marker(p, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map);
+      accCircle = L.circle(p, { radius: lastAcc || 20, color: '#2E90FA', weight: 1, fillOpacity: .08, interactive: false }).addTo(map);
       sb.rpc('update_my_location', { lat: p[0], lng: p[1] }).then(() => {});
+      let follow = true;
+      map.on('dragstart', () => { follow = false; });
+      $('#dRecenter').onclick = () => { follow = true; if (lastPos) map.setView(lastPos, 16); };
+      const onLoc = (e) => {
+        if (map._dead || !meMk) return;
+        animateMarker(meMk, e.detail.pos);
+        accCircle.setLatLng(e.detail.pos).setRadius(e.detail.acc || 20);
+        if (follow) map.panTo(e.detail.pos, { animate: true });
+      };
+      document.addEventListener('rk-loc', onLoc);
+      onLeave(() => document.removeEventListener('rk-loc', onLoc));
 
       const { data: d } = await sb.from('drivers').select('*').eq('id', S.user.id).single(); S.driver = d;
       const paintOnline = () => {
-        const on = S.driver.is_online, b = $('#onlineBtn');
+        const on = S.driver.is_online, b = $('#onlineBtn'); if (!b) return;
         b.style.background = on ? 'var(--green)' : '#5B6660'; b.setAttribute('aria-pressed', on);
         $('#onLbl').textContent = on ? 'متاح' : 'غير متاح';
         $('.ms', b).style.color = on ? 'var(--green)' : '#5B6660';
@@ -1207,33 +1363,37 @@ Screens.driverHome = () => {
         S.driver.is_online = next; haptic(); paintOnline(); loadReqs();
       };
 
-      const e = await rpc('my_earnings', { days: 1 }).catch(() => []);
-      const t = (e || []).reduce((a, x) => a + x.total, 0), n = (e || []).reduce((a, x) => a + x.trips, 0);
-      $('#today').textContent = money(t); $('#todayLbl').textContent = `دخل اليوم · ${num(n)} مشوار`;
+      rpc('my_earnings', { days: 1 }).then((e) => {
+        const t = (e || []).reduce((a, x) => a + x.total, 0), n = (e || []).reduce((a, x) => a + x.trips, 0);
+        if ($('#today')) { $('#today').textContent = money(t); $('#todayLbl').textContent = `دخل اليوم · ${num(n)} مشوار`; }
+      }).catch(() => {});
 
       let reqs = [];
       async function loadReqs() {
         const box = $('#reqs'); if (!box) return;
         if (!S.driver.is_online) {
           reqLayer.clearLayers(); $('#reqCount').textContent = '';
-          box.innerHTML = `<div class="empty" style="padding:24px">${icon('bedtime')}<b>إنت غير متاح</b><span class="small">دوس «متاح» فوق عشان تبدأ تستلم طلبات</span></div>`; return;
+          box.innerHTML = `<div class="row gap12 card" style="background:#F4F6F5">${icon('bedtime', '', 'color:var(--ink3);font-size:28px')}<div class="col"><b>إنت غير متاح</b><span class="small muted">دوس «متاح» فوق عشان تبدأ تستلم طلبات</span></div></div>`; return;
         }
-        const { data } = await sb.rpc('open_requests', { radius_m: 4000 });
+        const { data } = await sb.rpc('open_requests_v2', { radius_m: 4000 });
+        if (map._dead) return;
         reqs = data || [];
-        $('#reqCount').textContent = reqs.length ? `${num(reqs.length)} طلب` : '';
+        $('#reqCount').innerHTML = reqs.length ? `<span class="pill yellow" style="background:var(--yellow);color:var(--ink)">${num(reqs.length)} طلب</span>` : '';
         reqLayer.clearLayers();
-        reqs.forEach(r => L.marker([r.pickup_lat, r.pickup_lng], { icon: meIcon() }).addTo(reqLayer));
-        box.innerHTML = reqs.length ? reqs.map((r, i) => `<button class="driver-item" data-r="${i}" style="flex-direction:column;align-items:stretch;gap:10px">
+        reqs.forEach((r, i) => L.marker([r.pickup_lat, r.pickup_lng], { icon: priceIcon(money(r.offered_price), r.is_shared) })
+          .on('click', () => openRequest(reqs[i])).addTo(reqLayer));
+        box.innerHTML = reqs.length ? reqs.map((r, i) => `<button class="driver-item" data-r="${i}" style="flex-direction:column;align-items:stretch;gap:8px">
           <span class="row gap8"><span class="avatar grey" style="width:40px;height:40px">${initial(r.rider_name)}</span>
-            <span class="col grow"><b style="font-size:15px">${esc(r.rider_name || 'راكب')}</b><span class="small muted row gap4">${icon('star', 'f', 'font-size:14px;color:var(--star)')}${num(r.rider_rating || 5)} · على بعد ${distStr(r.away_m)}</span></span>
+            <span class="col grow"><b style="font-size:15px">${esc(r.rider_name || 'راكب')}${r.is_shared ? ` <span class="pill yellow">${icon('group', '', 'font-size:13px')}طرحة · ${num(r.riders)}</span>` : ''}</b>
+              <span class="small muted row gap4">${icon('star', 'f', 'font-size:14px;color:var(--star)')}${num(r.rider_rating || 5)} · على بعد ${distStr(r.away_m)}</span></span>
             <span class="price">${money(r.offered_price)}</span></span>
           <span class="row small muted gap4">${icon('trip_origin', '', 'font-size:16px;color:var(--blue)')}<span class="grow" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.pickup_address || '')}</span></span>
           <span class="row small muted gap4">${icon('flag', '', 'font-size:16px')}<span class="grow" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.dropoff_address || '')} · ${num((+r.distance_km).toFixed(1))} كم</span></span>
-        </button>`).join('') : `<div class="empty" style="padding:24px">${icon('radar')}<b>ما في طلبات قريبة هسع</b><span class="small">أول ما راكب يطلب بنوريك</span></div>`;
+        </button>`).join('') : `<div class="row gap12 card" style="background:#F4F6F5">${icon('radar', '', 'color:var(--green);font-size:28px')}<div class="col"><b>بندوّر ليك على طلبات…</b><span class="small muted">أول ما راكب قريب يطلب بنوريك</span></div></div>`;
         $$('[data-r]').forEach(b => b.onclick = () => openRequest(reqs[+b.dataset.r]));
       }
       loadReqs();
-      every(8000, () => { loadReqs(); if (lastPos && meMk) meMk.setLatLng(lastPos); });
+      every(8000, loadReqs);
       channel('reqs').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'trips' }, () => { haptic(); loadReqs(); })
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'trips' }, (pl) => {
           if (pl.new.driver_id === S.user.id && pl.new.status === 'accepted') { haptic(); toast('الراكب قبل عرضك!', 'success'); go('driverTrip', { id: pl.new.id }, { root: true }); }
@@ -1284,7 +1444,7 @@ function openRequest(r) {
 
 /* ---------- Driver: Active trip ---------- */
 Screens.driverTrip = ({ id }) => {
-  let map, trip, rider, meMk;
+  let map, trip, rider, meMk, shares = [], paxLayer;
   const NEXT = {
     accepted: ['arriving', 'navigation', 'أنا في الطريق للراكب'],
     arriving: ['arrived', 'where_to_vote', 'وصلت مكان الراكب'],
@@ -1311,11 +1471,22 @@ Screens.driverTrip = ({ id }) => {
       L.marker(trip._dropoff, { icon: destIcon() }).addTo(map);
       const p = await getPos(); if (map._dead) return; meMk = L.marker(p, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map);
       const rf = routeFollower(map);
+      paxLayer = L.layerGroup().addTo(map);
+      const paintPax = async () => {
+        if (!trip.is_shared || map._dead) return;
+        shares = await loadShares(id); if (map._dead) return;
+        paxLayer.clearLayers();
+        shares.filter(x => !x.is_owner).forEach(x => {
+          L.marker([x.pickup_lat, x.pickup_lng], { icon: priceIcon(esc((x.full_name || '').split(' ')[0]), true) }).addTo(paxLayer);
+          L.marker([x.dropoff_lat, x.dropoff_lng], { icon: destIcon() }).addTo(paxLayer);
+        });
+      };
+      paintPax();
       let follow = true;
       map.on('dragstart', () => { follow = false; });
       const refreshRoute = async () => {
         if (!lastPos || map._dead) return;
-        meMk.setLatLng(lastPos);
+        animateMarker(meMk, lastPos);
         const target = trip.status === 'in_progress' ? trip._dropoff : trip._pickup;
         const r = await rf.update(lastPos, target);
         if (r && $('#navInfo')) $('#navInfo').innerHTML = `<b style="font-size:20px">${num(r.min)} د</b><span class="small muted">${num(r.km.toFixed(1))} كم ${trip.status === 'in_progress' ? 'للوجهة' : 'للراكب'}</span>`;
@@ -1347,6 +1518,7 @@ Screens.driverTrip = ({ id }) => {
           <div class="card row gap12" style="background:#F4F6F5;padding:10px 14px">${icon('navigation', 'f', 'color:var(--blue)')}<div class="col grow" id="navInfo"><span class="small muted">بنحسب الطريق…</span></div>
             <button class="icon-btn" id="recenter" aria-label="تتبع موقعي" style="background:#fff">${icon('my_location')}</button></div>
           ${trip.status === 'in_progress' ? meterHtml(trip, Meter.km || +trip.traveled_km || 0) : ''}
+          ${trip.is_shared ? sharesHtml(shares = await loadShares(id), { driver: true }) : ''}
           <div class="actions3">
             <a class="act" href="https://www.google.com/maps/dir/?api=1&destination=${target[0]},${target[1]}&travelmode=driving">${icon('map')}خرائط جوجل</a>
             <button class="act dark" id="chatBtn">${icon('chat')}دردشة${unread ? `<span class="badge">${num(unread)}</span>` : ''}</button>
@@ -1361,7 +1533,8 @@ Screens.driverTrip = ({ id }) => {
         refreshRoute();
         $('#nextBtn') && ($('#nextBtn').onclick = async (e) => {
           const btn = e.currentTarget;
-          if (nx[0] === 'completed' && !(await confirmBox('تنهي المشوار؟', `السعر المتفق عليه ${money(trip.final_price)} — العداد قرا ${num((Meter.km || 0).toFixed(1))} كم (${money(fareFor(Meter.km || 0))}). استلم المبلغ كاش من الراكب.`, 'إنهاء'))) return;
+          if (nx[0] === 'completed' && trip.is_shared && !(await confirmBox('تنهي الطرحة؟', `استلم من كل راكب نصيبه: ${shares.map(x => (x.full_name || '').split(' ')[0] + ' ' + money(x.share)).join('، ')} — الإجمالي ${money(shares[0]?.total || trip.final_price)}`, 'إنهاء'))) return;
+          if (nx[0] === 'completed' && !trip.is_shared && !(await confirmBox('تنهي المشوار؟', `السعر المتفق عليه ${money(trip.final_price)} — العداد قرا ${num((Meter.km || 0).toFixed(1))} كم (${money(fareFor(Meter.km || 0))}). استلم المبلغ كاش من الراكب.`, 'إنهاء'))) return;
           btn.disabled = true;
           const ok = await safe(() => rpc('set_trip_status', { p_trip: id, p_status: nx[0] }));
           if (ok !== undefined) {
@@ -1378,7 +1551,9 @@ Screens.driverTrip = ({ id }) => {
         });
       };
       render();
-      channel('dtrip').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'trips', filter: `id=eq.${id}` }, (pl) => {
+      channel('dtrip').on('postgres_changes', { event: '*', schema: 'public', table: 'trip_passengers', filter: `trip_id=eq.${id}` }, (pl) => {
+        haptic(); toast(pl.new && pl.new.status === 'joined' ? 'راكب جديد انضم للطرحة' : 'راكب انسحب من الطرحة'); paintPax(); render();
+      }).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'trips', filter: `id=eq.${id}` }, (pl) => {
         trip.status = pl.new.status;
         if (trip.status === 'cancelled') { toast('الراكب لغى المشوار', 'error'); return home(); }
         render();
@@ -1809,13 +1984,14 @@ Screens.admin = ({ tab = 'support' } = {}) => ({
       const f = (k, l, type = 'number') => `<div class="field"><label for="s_${k}">${l}</label><input class="input" id="s_${k}" type="${type}" value="${esc(st[k] ?? '')}"></div>`;
       box.innerHTML = `<div class="card col gap12">
         <b>الأسعار</b>${f('base_fare', 'الأجرة الأساسية (جنيه)')}${f('per_km', 'سعر الكيلو (جنيه)')}</div>
+        <div class="card col gap12"><b>الطرحة</b>${f('shared_capacity', 'عدد المقاعد في الركشة')}${f('shared_extra_pct', 'زيادة السواق لكل مجموعة إضافية (٪)')}</div>
         <div class="card col gap12"><b>الاشتراك</b>
           <label class="row gap8" style="justify-content:space-between"><span>إلزام السواقين بالاشتراك</span><input type="checkbox" id="s_req" ${st.require_subscription ? 'checked' : ''} style="width:24px;height:24px"></label>
           ${f('subscription_price', 'سعر الاشتراك الشهري')}${f('bankak_account', 'رقم حساب بنكك', 'text')}${f('bankak_name', 'اسم صاحب الحساب', 'text')}</div>
         <button class="btn" id="saveSt">حفظ الإعدادات</button>`;
       $('#saveSt').onclick = async () => {
         const v = (k) => $('#s_' + k).value.trim();
-        const patch = { base_fare: +v('base_fare') || 0, per_km: +v('per_km') || 0, subscription_price: +v('subscription_price') || 0, bankak_account: v('bankak_account'), bankak_name: v('bankak_name'), require_subscription: $('#s_req').checked };
+        const patch = { shared_capacity: Math.min(6, Math.max(2, +v('shared_capacity') || 4)), shared_extra_pct: Math.max(0, +v('shared_extra_pct') || 0), base_fare: +v('base_fare') || 0, per_km: +v('per_km') || 0, subscription_price: +v('subscription_price') || 0, bankak_account: v('bankak_account'), bankak_name: v('bankak_name'), require_subscription: $('#s_req').checked };
         const ok = await safe(async () => { const { error } = await sb.from('app_settings').update(patch).eq('id', 1); if (error) throw error; return true; }, 'اتحفظت الإعدادات');
         if (ok) Object.assign(S.settings, patch);
       };

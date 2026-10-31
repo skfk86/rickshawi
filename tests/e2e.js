@@ -1,12 +1,13 @@
 // اختبار شامل من البداية للنهاية: راكب + سواق في متصفحين، ضد Supabase الحقيقي
-// run 8
+// run 9 — مع اختبار الطرحة (راكب تاني بينضم)
 // يشتغل في GitHub Actions (انظر .github/workflows/e2e.yml)
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
 
 const BASE = process.env.BASE_URL || 'http://localhost:8080';
 const PW = process.env.E2E_PASSWORD;
-const RIDER = '900000101', DRIVER = '900000102';
+const RIDER = '900000101', DRIVER = '900000102', RIDER2 = '900000103';
+const A2 = { latitude: 15.6683, longitude: 32.5717, accuracy: 8 };
 const A = { latitude: 15.6680, longitude: 32.5714, accuracy: 8 };
 const D0 = { latitude: 15.6684, longitude: 32.5704, accuracy: 8 };
 fs.mkdirSync('shots', { recursive: true });
@@ -34,9 +35,9 @@ async function step(name, pages, fn) {
     page.on('console', (m) => { if (m.type() === 'error') errors.push(`[${label}] console: ${m.text()}`); });
     return { ctx, page };
   };
-  const R = await mk(A, 'rider'), D = await mk(D0, 'driver');
-  const rp = R.page, dp = D.page;
-  const both = { rider: rp, driver: dp };
+  const R = await mk(A, 'rider'), D = await mk(D0, 'driver'), R2 = await mk(A2, 'rider2');
+  const rp = R.page, dp = D.page, r2 = R2.page;
+  const both = { rider: rp, driver: dp, rider2: r2 };
 
   const login = async (p, phone) => {
     await p.goto(BASE);
@@ -74,13 +75,32 @@ async function step(name, pages, fn) {
     await rp.waitForSelector('#reqBtn', { timeout: 20000 });
     await rp.waitForTimeout(1500); await shot(rp, 'rider-price');
   });
+  await step('rider enables طرحة (2 people)', both, async () => {
+    await rp.check('#shareTg');
+    await rp.waitForSelector('#sPlus'); await rp.click('#sPlus');
+    await rp.waitForSelector('#reqBtn:has-text("طرحة")');
+    await shot(rp, 'rider-shared-toggle');
+  });
   await step('rider requests trip', both, async () => {
     await rp.click('#reqBtn');
     await rp.waitForSelector('#cancel', { timeout: 15000 });
     await shot(rp, 'rider-waiting');
   });
+  await step('second rider finds and joins the طرحة', both, async () => {
+    await login(r2, RIDER2);
+    await r2.waitForSelector('#destIn'); await r2.waitForTimeout(2500);
+    const box = await r2.locator('#map').boundingBox();
+    await r2.mouse.click(box.x + box.width * 0.7, box.y + 140);
+    await r2.waitForSelector('[data-join]', { timeout: 20000 });
+    await shot(r2, 'rider2-join-card');
+    await r2.click('[data-join]');
+    await r2.waitForSelector('#wShares .card', { timeout: 15000 });
+    await rp.waitForFunction(() => /٣ ركاب/.test(document.querySelector('#wShares')?.textContent || ''), null, { timeout: 15000 });
+    await shot(r2, 'rider2-waiting'); await shot(rp, 'rider-waiting-shared');
+  });
   await step('driver receives request', both, async () => {
     await dp.waitForSelector('[data-r]', { timeout: 25000 });
+    await dp.waitForSelector('[data-r]:has-text("طرحة")', { timeout: 10000 });
     await shot(dp, 'driver-request');
   });
   await step('driver counter-offer reaches rider', both, async () => {
@@ -91,11 +111,17 @@ async function step(name, pages, fn) {
     await rp.waitForSelector('[data-acc]', { timeout: 20000 });
     await shot(rp, 'rider-offer');
   });
-  await step('rider accepts offer → tracking', both, async () => {
+  await step('rider accepts offer → tracking (both riders)', both, async () => {
     await rp.click('[data-acc]');
     await rp.waitForSelector('#chatBtn', { timeout: 20000 });
     await dp.waitForSelector('#nextBtn', { timeout: 25000 });
+    await r2.waitForSelector('#chatBtn', { timeout: 25000 });
     await rp.waitForTimeout(3000); await shot(rp, 'rider-tracking'); await shot(dp, 'driver-trip');
+  });
+  await step('fare split shown to riders and driver', both, async () => {
+    await r2.waitForFunction(() => /نصيبك/.test(document.body.textContent), null, { timeout: 15000 });
+    await dp.waitForFunction(() => /طرحة/.test(document.querySelector('#sheet')?.textContent || ''), null, { timeout: 15000 });
+    await shot(r2, 'rider2-tracking'); await shot(dp, 'driver-trip-shared');
   });
   await step('in-app route & ETA shown to driver', both, async () => {
     await dp.waitForFunction(() => /د/.test(document.querySelector('#navInfo')?.textContent || ''), null, { timeout: 20000 });
@@ -136,7 +162,8 @@ async function step(name, pages, fn) {
     await dp.click('[data-ok]');
     await dp.waitForSelector('#send', { timeout: 15000 });
     await rp.waitForSelector('#send', { timeout: 25000 });
-    await shot(rp, 'rider-rating');
+    await r2.waitForSelector('#send', { timeout: 25000 });
+    await shot(rp, 'rider-rating'); await shot(r2, 'rider2-rating');
   });
   await step('both rate each other', both, async () => {
     await rp.waitForSelector('#send:not([disabled])'); await rp.locator('[data-s="4"]').click(); await rp.locator('[data-t]').first().click(); await rp.click('#send');
