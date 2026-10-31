@@ -143,18 +143,57 @@ async function getPos(highAccuracy = true) {
         const r = await P.Geolocation.requestPermissions();
         if (r.location !== 'granted') throw new Error('perm');
       }
-      const p = await P.Geolocation.getCurrentPosition({ enableHighAccuracy: highAccuracy, timeout: 15000 });
-      lastPos = [p.coords.latitude, p.coords.longitude];
-      return lastPos;
+      return await bestFix((cb) => P.Geolocation.watchPosition({ enableHighAccuracy: highAccuracy, timeout: 15000, maximumAge: 0 }, (p, err) => cb(p, err)),
+        (id) => P.Geolocation.clearWatch({ id }), highAccuracy);
     }
-    return await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(
-      (p) => { lastPos = [p.coords.latitude, p.coords.longitude]; res(lastPos); },
-      rej, { enableHighAccuracy: highAccuracy, timeout: 15000, maximumAge: 10000 }));
+    return await bestFix((cb) => navigator.geolocation.watchPosition((p) => cb(p), (e) => cb(null, e), { enableHighAccuracy: highAccuracy, timeout: 15000, maximumAge: 0 }),
+      (id) => navigator.geolocation.clearWatch(id), highAccuracy);
   } catch (e) {
     if (!lastPos) toast('فعّل خدمة الموقع (GPS) عشان نلقى ليك أقرب ركشة', 'error');
     return lastPos || C.DEFAULT_CENTER;
   }
 }
+
+// بنسمع للـ GPS لحدي ما الدقة تبقى كويسة (أو ينتهي الوقت) ونرجع أدق قراءة
+let lastAcc = null;
+async function bestFix(start, stop, precise) {
+  const maxMs = precise ? 7000 : 2500, target = 20;
+  return new Promise(async (res, rej) => {
+    let best = null, done = false, id = null;
+    const finish = () => {
+      if (done) return; done = true;
+      try { if (id != null) stop(id); } catch (_) {}
+      if (best) { lastPos = [best.latitude, best.longitude]; lastAcc = best.accuracy; res(lastPos); } else rej(new Error('nofix'));
+    };
+    id = await start((p, err) => {
+      if (err || !p) return;
+      if (!best || p.coords.accuracy < best.accuracy) best = p.coords;
+      if (best.accuracy <= target) finish();
+    });
+    setTimeout(finish, maxMs);
+  });
+}
+
+/* ---------- Routing (OSRM — شوارع حقيقية، بدون مفتاح) ---------- */
+const routeCache = {};
+async function getRoute(a, b) {
+  const key = [a, b].map(p => p[0].toFixed(4) + ',' + p[1].toFixed(4)).join('|');
+  if (routeCache[key]) return routeCache[key];
+  try {
+    const u = `${C.ROUTER}/route/v1/driving/${a[1]},${a[0]};${b[1]},${b[0]}?overview=full&geometries=geojson`;
+    const j = await (await fetch(u)).json();
+    const r = j.routes && j.routes[0];
+    if (!r) throw new Error('noroute');
+    // سرعة الركشة في المدينة أبطأ من العربية
+    const out = { coords: r.geometry.coordinates.map(c => [c[1], c[0]]), km: r.distance / 1000, min: Math.max(1, Math.round(r.duration / 60 * 1.25)), real: true };
+    routeCache[key] = out;
+    return out;
+  } catch (_) {
+    const km = roadKm(a, b);
+    return { coords: [a, b], km, min: Math.max(1, Math.round(km / 18 * 60)), real: false };
+  }
+}
+const fareFor = (km) => suggestPrice(km);
 
 /* ---------- Geocoding (OSM Nominatim) ---------- */
 async function geocode(q) {
@@ -320,6 +359,67 @@ const Loc = {
   stop() { if (this.id) clearInterval(this.id); this.id = null; }
 };
 
+/* ---------- رسم المسار لحظياً ---------- */
+function routeFollower(map) {
+  const line = L.polyline([], { color: '#0F1A14', weight: 5, opacity: .85 }).addTo(map);
+  let lastFrom = null, lastTo = null, info = null;
+  return {
+    async update(from, to) {
+      if (!from || !to) return info;
+      const moved = !lastFrom || haversineKm(from, lastFrom) > 0.06 || !lastTo || haversineKm(to, lastTo) > 0.01;
+      if (!moved) return info;
+      lastFrom = from; lastTo = to;
+      info = await getRoute(from, to);
+      line.setLatLngs(info.coords);
+      return info;
+    },
+    get info() { return info; }
+  };
+}
+
+/* ---------- عداد المسافة (للسواق أثناء المشوار) ---------- */
+const Meter = {
+  trip: null, km: 0, last: null, watchId: null, sendId: null,
+  async start(tripId, serverKm) {
+    if (this.trip === tripId && this.watchId != null) return;
+    this.stop();
+    this.trip = tripId;
+    const saved = parseFloat(await storage.getItem('rk_meter_' + tripId) || '0');
+    this.km = Math.max(saved, +serverKm || 0); this.last = null;
+    const onFix = (p) => {
+      if (!p || !p.coords || p.coords.accuracy > 35) return;
+      const pt = [p.coords.latitude, p.coords.longitude];
+      lastPos = pt;
+      if (this.last) {
+        const d = haversineKm(this.last, pt);
+        if (d < 0.012) return;          // ضوضاء GPS
+        if (d < 0.6) this.km += d;      // تجاهل القفزات الغريبة
+      }
+      this.last = pt;
+      storage.setItem('rk_meter_' + tripId, String(this.km));
+      document.dispatchEvent(new CustomEvent('rk-meter', { detail: this.km }));
+    };
+    if (isNative && P.Geolocation) this.watchId = await P.Geolocation.watchPosition({ enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }, (p) => onFix(p));
+    else this.watchId = navigator.geolocation.watchPosition(onFix, () => {}, { enableHighAccuracy: true, maximumAge: 0 });
+    this.sendId = setInterval(() => sb.rpc('update_trip_meter', { p_trip: tripId, p_km: +this.km.toFixed(3) }).then(() => {}), 12000);
+  },
+  async stop(final) {
+    if (this.watchId != null) { try { isNative && P.Geolocation ? P.Geolocation.clearWatch({ id: this.watchId }) : navigator.geolocation.clearWatch(this.watchId); } catch (_) {} }
+    if (this.sendId) clearInterval(this.sendId);
+    if (final && this.trip) await sb.rpc('update_trip_meter', { p_trip: this.trip, p_km: +this.km.toFixed(3) });
+    this.watchId = null; this.sendId = null;
+  }
+};
+function meterHtml(trip, km) {
+  const live = fareFor(km);
+  return `<div class="card col gap8" style="background:var(--ink);color:#fff">
+    <div class="row" style="justify-content:space-between"><span class="row gap4 small" style="color:#C2CCC6">${icon('speed', '', 'font-size:18px;color:var(--yellow)')}العداد</span><span class="small" style="color:#C2CCC6">السعر المتفق عليه ${money(trip.final_price)}</span></div>
+    <div class="row" style="justify-content:space-between;align-items:baseline">
+      <b style="font-size:28px;color:var(--yellow)" id="mFare">${money(live)}</b>
+      <span style="font-size:16px"><b id="mKm">${num(km.toFixed(2))}</b> كم</span></div>
+    <span class="small" style="color:#A9B5AE">العداد بيحسب ${money(S.settings?.base_fare || 0)} فتحة + ${money(S.settings?.per_km || 0)} لكل كيلو مقطوع</span></div>`;
+}
+
 /* ---------- Image compress + upload ---------- */
 function compressImage(file, maxW = 1280, q = 0.8) {
   return new Promise((res, rej) => {
@@ -442,14 +542,18 @@ Screens.riderHome = () => {
       onLeave(() => map.remove());
       const setPickup = async (p) => {
         pickup = p;
-        if (!meMk) meMk = L.marker(p, { icon: meIcon(), zIndexOffset: 1000 }).addTo(map); else meMk.setLatLng(p);
+        if (!meMk) {
+          meMk = L.marker(p, { icon: meIcon(), zIndexOffset: 1000, draggable: true }).addTo(map);
+          meMk.on('dragend', () => { const ll = meMk.getLatLng(); setPickup([ll.lat, ll.lng]); if (dest) setDest(dest); });
+        } else meMk.setLatLng(p);
         pickupAddr = await reverse(p[0], p[1]);
         $('#pickAddr') && ($('#pickAddr').textContent = pickupAddr);
         $('#pickAddr2') && ($('#pickAddr2').textContent = pickupAddr);
       };
       const p = await getPos();
-      map.setView(p, 16);
+      map.setView(p, 17);
       setPickup(p);
+      if (lastAcc && lastAcc > 40) toast('دقة الموقع ضعيفة — اسحب النقطة الزرقاء لمكانك بالضبط');
       $('#recenter').onclick = async () => { const q = await getPos(); map.setView(q, 16); setPickup(q); };
 
       const loadDrivers = async () => {
@@ -463,14 +567,18 @@ Screens.riderHome = () => {
       setTimeout(loadDrivers, 600);
       every(10000, loadDrivers);
 
-      const setDest = (d) => {
+      let routeLine = null, routeMin = 0;
+      const setDest = async (d) => {
         dest = d;
         if (!destMk) destMk = L.marker([d.lat, d.lng], { icon: destIcon() }).addTo(map); else destMk.setLatLng([d.lat, d.lng]);
         $('#destIn').value = d.name;
         $('#results').innerHTML = '';
-        km = roadKm(pickup, [d.lat, d.lng]);
+        const r = await getRoute(pickup, [d.lat, d.lng]);
+        km = r.km; routeMin = r.min;
         price = suggestPrice(km);
-        map.fitBounds(L.latLngBounds([pickup, [d.lat, d.lng]]).pad(0.4), { paddingBottomRight: [0, 260] });
+        if (routeLine) routeLine.remove();
+        routeLine = L.polyline(r.coords, { color: '#0F1A14', weight: 5, opacity: .85 }).addTo(map);
+        map.fitBounds(routeLine.getBounds().pad(0.3), { paddingBottomRight: [0, 280] });
         renderBottom();
       };
       map.on('click', async (e) => {
@@ -504,7 +612,7 @@ Screens.riderHome = () => {
         if (!dest) { b.innerHTML = near + (list ? `<div class="col gap8">${list}</div><p class="small muted" style="margin:0;text-align:center">اكتب وجهتك عشان تشوف السعر وتطلب</p>` : ''); return; }
         b.innerHTML = `${near}
           <div class="card row" style="background:#F4F6F5;justify-content:space-between">
-            <div class="col"><span class="small muted">${num(km.toFixed(1))} كم · حوالي ${num(Math.round(km / 18 * 60) + 2)} دقيقة</span><span class="small muted">السواقين ممكن يقترحوا سعر تاني</span></div>
+            <div class="col"><span class="small muted">${num(km.toFixed(1))} كم بالشوارع · حوالي ${num(routeMin)} دقيقة</span><span class="small muted">السواقين ممكن يقترحوا سعر تاني</span></div>
             <div class="stepper"><button id="minus" aria-label="نقّص السعر">${icon('remove')}</button>
               <b class="price" id="priceV" style="min-width:76px;text-align:center">${money(price)}</b>
               <button id="plus" aria-label="زيد السعر">${icon('add')}</button></div>
@@ -631,15 +739,14 @@ Screens.tracking = ({ id }) => {
       onLeave(() => map.remove());
       L.marker(trip._pickup, { icon: meIcon() }).addTo(map);
       L.marker(trip._dropoff, { icon: destIcon() }).addTo(map);
-      const line = L.polyline([], { color: '#0F1A14', weight: 5, opacity: .85, dashArray: '1 10', lineCap: 'round' }).addTo(map);
-      const updDriver = (loc) => {
+      const rf = routeFollower(map);
+      const updDriver = async (loc) => {
         if (!loc) return;
         drv._loc = loc;
         if (!drvMk) drvMk = L.marker(loc, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map); else drvMk.setLatLng(loc);
         const target = trip.status === 'in_progress' ? trip._dropoff : trip._pickup;
-        line.setLatLngs([loc, target]);
-        const m = haversineKm(loc, target) * 1300;
-        $('#eta').textContent = trip.status === 'arrived' ? '' : `${num(etaMin(m))} د`;
+        const r = await rf.update(loc, target);
+        if (r && $('#eta')) $('#eta').textContent = trip.status === 'arrived' ? '' : `${num(r.min)} د · ${num(r.km.toFixed(1))} كم`;
       };
       updDriver(drv._loc);
       map.fitBounds(L.latLngBounds([trip._pickup, trip._dropoff].concat(drv._loc ? [drv._loc] : [])).pad(0.35), { paddingBottomRight: [0, 300] });
@@ -662,6 +769,7 @@ Screens.tracking = ({ id }) => {
             <a class="act" href="tel:${esc(drv.phone || '')}">${icon('call')}اتصال</a>
             <button class="act" id="shareBtn">${icon('shield_person')}شارك الرحلة</button>
           </div>
+          ${trip.status === 'in_progress' ? meterHtml(trip, +trip.traveled_km || 0) : ''}
           <div class="row gap8 card" style="background:#F4F6F5">${icon('flag', '', 'color:var(--ink3)')}<span class="grow" style="font-size:14px">${esc(trip.dropoff_address || 'الوجهة')}</span><b class="row gap4">${icon('payments', '', 'font-size:18px;color:var(--green)')}${money(trip.final_price || trip.offered_price)}</b></div>
           ${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon('close')}إلغاء المشوار</button>` : ''}`;
         $('#chatBtn').onclick = () => go('chat', { id });
@@ -678,6 +786,9 @@ Screens.tracking = ({ id }) => {
         Object.assign(trip, p.new); trip._pickup = parsePoint(p.new.pickup) || trip._pickup; trip._dropoff = parsePoint(p.new.dropoff) || trip._dropoff;
         if (trip.status === 'completed') { haptic(); return go('rating', { id }, { root: true }); }
         if (trip.status === 'cancelled') { toast('السواق لغى المشوار — ممكن تطلب تاني', 'error'); return home(); }
+        if (prev === trip.status && trip.status === 'in_progress' && $('#mKm')) {
+          const k = +trip.traveled_km || 0; $('#mKm').textContent = num(k.toFixed(2)); $('#mFare').textContent = money(fareFor(k)); return;
+        }
         if (prev !== trip.status) { haptic(); if (trip.status === 'arrived') toast('الركشة وصلت! السواق منتظرك', 'success'); }
         render(); updDriver(drv._loc);
       }).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'drivers', filter: `id=eq.${trip.driver_id}` }, (p) => {
@@ -813,7 +924,7 @@ Screens.rating = ({ id }) => {
       $('#rAv').innerHTML = initial(o.full_name);
       $('#rSub').textContent = `${trip.dropoff_address || ''} · ${trip.completed_at ? timeStr(trip.completed_at) : ''}`;
       const mins = trip.completed_at && trip.accepted_at ? Math.round((new Date(trip.completed_at) - new Date(trip.accepted_at)) / 60000) : null;
-      $('#rStats').innerHTML = `<div class="col"><span class="small muted">المسافة</span><b>${num((+trip.distance_km || 0).toFixed(1))} كم</b></div>
+      $('#rStats').innerHTML = `<div class="col"><span class="small muted">المسافة</span><b>${num((+trip.traveled_km > 0 ? +trip.traveled_km : +trip.distance_km || 0).toFixed(1))} كم</b></div>
         <div class="col" style="border-inline:1px solid var(--line)"><span class="small muted">الزمن</span><b>${mins != null ? num(mins) + ' د' : '—'}</b></div>
         <div class="col"><span class="small muted">${iAmRider ? 'ادفع كاش' : 'استلم كاش'}</span><b>${money(trip.final_price)}</b></div>`;
       const paint = () => {
@@ -1159,8 +1270,24 @@ Screens.driverTrip = ({ id }) => {
       L.marker(trip._pickup, { icon: meIcon() }).addTo(map);
       L.marker(trip._dropoff, { icon: destIcon() }).addTo(map);
       const p = await getPos(); meMk = L.marker(p, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map);
-      map.fitBounds(L.latLngBounds([trip._pickup, trip._dropoff, p]).pad(0.35), { paddingBottomRight: [0, 320] });
-      every(5000, () => lastPos && meMk.setLatLng(lastPos));
+      const rf = routeFollower(map);
+      let follow = true;
+      map.on('dragstart', () => { follow = false; });
+      const refreshRoute = async () => {
+        if (!lastPos) return;
+        meMk.setLatLng(lastPos);
+        const target = trip.status === 'in_progress' ? trip._dropoff : trip._pickup;
+        const r = await rf.update(lastPos, target);
+        if (r && $('#navInfo')) $('#navInfo').innerHTML = `<b style="font-size:20px">${num(r.min)} د</b><span class="small muted">${num(r.km.toFixed(1))} كم ${trip.status === 'in_progress' ? 'للوجهة' : 'للراكب'}</span>`;
+        if (follow) map.panTo(lastPos, { animate: true });
+      };
+      const first = await rf.update(p, trip.status === 'in_progress' ? trip._dropoff : trip._pickup);
+      map.fitBounds(L.polyline(first.coords).getBounds().pad(0.3), { paddingBottomRight: [0, 340] });
+      every(5000, refreshRoute);
+      const onMeter = (e) => { if ($('#mKm')) { $('#mKm').textContent = num(e.detail.toFixed(2)); $('#mFare').textContent = money(fareFor(e.detail)); } };
+      document.addEventListener('rk-meter', onMeter);
+      onLeave(() => document.removeEventListener('rk-meter', onMeter));
+      if (trip.status === 'in_progress') Meter.start(id, trip.traveled_km);
 
       const render = async () => {
         $('#stTxt').textContent = STATUS_AR[trip.status];
@@ -1174,22 +1301,28 @@ Screens.driverTrip = ({ id }) => {
           <div class="route-box"><div class="route-dots"><span class="dot-a"></span><span class="dash"></span><span class="dot-b"></span></div>
             <div class="col grow gap8"><span style="font-size:14px;${trip.status === 'in_progress' ? 'color:var(--ink3)' : 'font-weight:600'}">${esc(trip.pickup_address || '')}</span>
             <span style="font-size:14px;${trip.status === 'in_progress' ? 'font-weight:600' : 'color:var(--ink3)'}">${esc(trip.dropoff_address || '')}</span></div></div>
+          <div class="card row gap12" style="background:#F4F6F5;padding:10px 14px">${icon('navigation', 'f', 'color:var(--blue)')}<div class="col grow" id="navInfo"><span class="small muted">بنحسب الطريق…</span></div>
+            <button class="icon-btn" id="recenter" aria-label="تتبع موقعي" style="background:#fff">${icon('my_location')}</button></div>
+          ${trip.status === 'in_progress' ? meterHtml(trip, Meter.km || +trip.traveled_km || 0) : ''}
           <div class="actions3">
-            <a class="act" href="https://www.google.com/maps/dir/?api=1&destination=${target[0]},${target[1]}&travelmode=driving">${icon('directions')}الاتجاهات</a>
+            <a class="act" href="https://www.google.com/maps/dir/?api=1&destination=${target[0]},${target[1]}&travelmode=driving">${icon('map')}خرائط جوجل</a>
             <button class="act dark" id="chatBtn">${icon('chat')}دردشة${unread ? `<span class="badge">${num(unread)}</span>` : ''}</button>
             <a class="act" href="tel:${esc(rider.phone || '')}">${icon('call')}اتصال</a>
           </div>
           ${nx ? `<button class="btn ${trip.status === 'in_progress' ? 'yellow' : ''}" id="nextBtn" style="height:60px">${icon(nx[1])}${nx[2]}</button>` : ''}
           ${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon('close')}إلغاء المشوار</button>` : ''}`;
         $('#chatBtn').onclick = () => go('chat', { id });
+        $('#recenter').onclick = () => { follow = true; refreshRoute(); if (lastPos) map.setView(lastPos, 17); };
+        refreshRoute();
         $('#nextBtn') && ($('#nextBtn').onclick = async (e) => {
           const btn = e.currentTarget;
-          if (nx[0] === 'completed' && !(await confirmBox('تنهي المشوار؟', `استلم ${money(trip.final_price)} كاش من الراكب.`, 'إنهاء'))) return;
+          if (nx[0] === 'completed' && !(await confirmBox('تنهي المشوار؟', `السعر المتفق عليه ${money(trip.final_price)} — العداد قرا ${num((Meter.km || 0).toFixed(1))} كم (${money(fareFor(Meter.km || 0))}). استلم المبلغ كاش من الراكب.`, 'إنهاء'))) return;
           btn.disabled = true;
           const ok = await safe(() => rpc('set_trip_status', { p_trip: id, p_status: nx[0] }));
           if (ok !== undefined) {
             haptic(); trip.status = nx[0];
-            if (nx[0] === 'completed') { return go('rating', { id }, { root: true }); }
+            if (nx[0] === 'in_progress') Meter.start(id, 0);
+            if (nx[0] === 'completed') { await Meter.stop(true); return go('rating', { id }, { root: true }); }
             render();
           } else btn.disabled = false;
         });

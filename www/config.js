@@ -11,6 +11,8 @@ window.RK_CONFIG = {
   TILES_ATTR: '© OpenStreetMap',
   TILES_FALLBACK: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
   TILES_FALLBACK_ATTR: '© Esri, OpenStreetMap',
+  // محرك المسارات (OSRM). الخادم العام للتجربة — للإنتاج استضف OSRM خاص بيك
+  ROUTER: 'https://router.project-osrm.org',
   SEARCH_RADIUS_M: 3000,
   DRIVER_LOCATION_INTERVAL_MS: 8000,
   SUPPORT_PHONE: '[رقم الدعم]'
