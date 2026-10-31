@@ -926,7 +926,7 @@ Screens.rating = ({ id }) => {
         <div class="row gap8" style="flex-wrap:wrap;justify-content:center">${TAGS.map(([ic, t]) => `<button type="button" class="chip" data-t="${t}" aria-pressed="false">${icon(ic, '', 'font-size:16px')}${t}</button>`).join('')}</div>
         <label for="note" class="sr">ملاحظة</label><input class="input" id="note" placeholder="أضف ملاحظة (اختياري)" style="height:48px">
       </div>
-      <div class="row gap8"><button class="btn ghost" id="skip" style="width:96px">تخطي</button><button class="btn" id="send">أرسل التقييم</button></div>
+      <div class="row gap8"><button class="btn ghost" id="skip" style="width:96px">تخطي</button><button class="btn" id="send" disabled>أرسل التقييم</button></div>
     </div></div>`,
     async mount() {
       const trip = await safe(() => getTrip(id));
@@ -950,6 +950,7 @@ Screens.rating = ({ id }) => {
       $$('[data-s]').forEach(b => b.onclick = () => { stars = +b.dataset.s; haptic(); paint(); });
       $$('[data-t]').forEach(b => b.onclick = () => { const t = b.dataset.t; tags.has(t) ? tags.delete(t) : tags.add(t); b.classList.toggle('on'); b.setAttribute('aria-pressed', tags.has(t)); });
       $('#skip').onclick = home;
+      $('#send').disabled = false;
       $('#send').onclick = async () => {
         const ok = await safe(async () => {
           const { error } = await sb.from('ratings').insert({ trip_id: id, rater_id: S.user.id, ratee_id: otherId, stars, tags: [...tags], note: $('#note').value.trim() || null });

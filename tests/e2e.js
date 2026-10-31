@@ -1,5 +1,5 @@
 // اختبار شامل من البداية للنهاية: راكب + سواق في متصفحين، ضد Supabase الحقيقي
-// run 4
+// run 5
 // يشتغل في GitHub Actions (انظر .github/workflows/e2e.yml)
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -138,8 +138,8 @@ async function step(name, pages, fn) {
     await shot(rp, 'rider-rating');
   });
   await step('both rate each other', both, async () => {
-    await rp.locator('[data-s="5"]').click(); await rp.locator('[data-t]').first().click(); await rp.click('#send');
-    await dp.click('#send');
+    await rp.waitForSelector('#send:not([disabled])'); await rp.locator('[data-s="4"]').click(); await rp.locator('[data-t]').first().click(); await rp.click('#send');
+    await dp.waitForSelector('#send:not([disabled])'); await dp.click('#send');
     await rp.waitForSelector('.nav', { timeout: 15000 }); await dp.waitForSelector('.nav', { timeout: 15000 });
   });
   await step('history shows completed trip', both, async () => {
