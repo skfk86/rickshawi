@@ -1,5 +1,5 @@
 // اختبار شامل من البداية للنهاية: راكب + سواق في متصفحين، ضد Supabase الحقيقي
-// run 13 — إعادة الفحص
+// run 14 — بلاغات مختلفة للراكب والسواق
 // يشتغل في GitHub Actions (انظر .github/workflows/e2e.yml)
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -131,6 +131,22 @@ async function step(name, pages, fn) {
     await rp.click('.sheet .grab-hit'); await rp.waitForTimeout(400);
     if (!(h2 < h1 - 100)) throw new Error(`heights ${h1} → ${h2}`);
   });
+  await step('rider safety sheet (999, share, report)', both, async () => {
+    await rp.click('#shareBtn');
+    await rp.waitForSelector('a[href="tel:999"]'); await rp.waitForSelector('#sfReport');
+    await shot(rp, 'rider-safety');
+    await rp.click('#sfReport');
+    await rp.waitForSelector('[data-cat="dangerous_driving"]');
+    if (await rp.locator('[data-cat="no_payment"]').count()) throw new Error('driver category shown to rider');
+    await rp.mouse.click(10, 10); await rp.waitForSelector('.overlay', { state: 'detached' });
+  });
+  await step('driver sees rider-specific problem options', both, async () => {
+    await dp.click('#reportBtn');
+    await dp.waitForSelector('[data-cat="extra_riders"]');
+    if (await dp.locator('[data-cat="dangerous_driving"]').count()) throw new Error('rider category shown to driver');
+    await shot(dp, 'driver-problem');
+    await dp.mouse.click(10, 10); await dp.waitForSelector('.overlay', { state: 'detached' });
+  });
   await step('in-app route & ETA shown to driver', both, async () => {
     await dp.waitForFunction(() => /د/.test(document.querySelector('#navInfo')?.textContent || ''), null, { timeout: 20000 });
   });
@@ -174,7 +190,12 @@ async function step(name, pages, fn) {
     await shot(rp, 'rider-rating'); await shot(r2, 'rider2-rating');
   });
   await step('both rate each other', both, async () => {
-    await rp.waitForSelector('#send:not([disabled])'); await rp.locator('[data-s="4"]').click(); await rp.locator('[data-t]').first().click(); await rp.click('#send');
+    await rp.waitForSelector('#send:not([disabled])');
+    await rp.waitForSelector('[data-iss="lost_item"]');
+    await rp.locator('[data-s="2"]').click(); await rp.waitForSelector('[data-iss="overcharge"]');
+    await shot(rp, 'rider-rating-low');
+    await dp.waitForSelector('[data-iss="no_payment"]');
+    await rp.locator('[data-s="4"]').click(); await rp.locator('[data-t]').first().click(); await rp.click('#send');
     await dp.waitForSelector('#send:not([disabled])'); await dp.click('#send');
     await rp.waitForSelector('.nav', { timeout: 15000 }); await dp.waitForSelector('.nav', { timeout: 15000 });
   });
@@ -186,7 +207,8 @@ async function step(name, pages, fn) {
   await step('report from history + shows in بلاغاتي', both, async () => {
     await rp.locator('[data-rp]').first().click();
     await rp.waitForSelector('[data-cat="route"]');
-    await rp.click('[data-cat="route"]'); await rp.fill('#rpD', 'اختبار بلاغ: لف بطريق طويل');
+    await rp.waitForSelector('[data-cat="lost_item"]');
+    await rp.click('[data-cat="route"]'); await rp.waitForSelector('#rpD'); await rp.fill('#rpD', 'اختبار بلاغ: لف بطريق طويل');
     await shot(rp, 'rider-report-modal');
     await rp.click('#rpSend');
     await rp.waitForSelector('.overlay', { state: 'detached', timeout: 10000 });
@@ -201,7 +223,7 @@ async function step(name, pages, fn) {
     await r2.click('[data-nav="history"]');
     await r2.waitForSelector('[data-rp]', { timeout: 15000 });
     await r2.locator('[data-rp]').first().click();
-    await r2.click('[data-cat="behavior"]'); await r2.click('#rpSend');
+    await r2.click('[data-cat="behavior"]'); await r2.waitForSelector('#rpSend'); await r2.click('#rpSend');
     await r2.waitForSelector('.overlay', { state: 'detached', timeout: 10000 });
   });
   await step('waiting timer renders', both, async () => {});

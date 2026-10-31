@@ -931,20 +931,18 @@ Screens.tracking = ({ id }) => {
           <div class="actions3">
             <button class="act dark" id="chatBtn">${icon('chat')}دردشة${unread ? `<span class="badge">${num(unread)}</span>` : ''}</button>
             <a class="act" href="tel:${esc(drv.phone || '')}">${icon('call')}اتصال</a>
-            <button class="act" id="shareBtn">${icon('shield_person')}شارك الرحلة</button>
+            <button class="act" id="shareBtn" style="color:var(--green-ink)">${icon('shield', 'f')}الأمان</button>
           </div>
           ${trip.status === 'in_progress' ? meterHtml(trip, +trip.traveled_km || 0) : ''}
           ${trip.is_shared ? sharesHtml(sh = await loadShares(id)) : ''}
           <div class="row gap8 card" style="background:#F4F6F5">${icon('flag', '', 'color:var(--ink3)')}<span class="grow" style="font-size:14px">${esc(trip.dropoff_address || 'الوجهة')}</span><b class="row gap4">${icon('payments', '', 'font-size:18px;color:var(--green)')}${money((trip.is_shared && (sh.find(x => x.rider_id === S.user.id) || {}).share) || trip.final_price || trip.offered_price)}</b></div>
-          <div class="row gap8">${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon(trip.rider_id === S.user.id ? 'close' : 'logout')}${trip.rider_id === S.user.id ? 'إلغاء المشوار' : 'انسحاب'}</button>` : ''}
-            <button class="btn danger" id="reportBtn" style="color:var(--ink3)">${icon('flag')}إبلاغ</button></div>`;
+          ${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon(trip.rider_id === S.user.id ? 'close' : 'logout')}${trip.rider_id === S.user.id ? 'إلغاء المشوار' : 'انسحاب'}</button>` : ''}`;
         $('#chatBtn').onclick = () => go('chat', { id });
-        $('#reportBtn').onclick = () => openReport({ tripId: id, reportedId: trip.driver_id, reportedName: drv.full_name });
         if (trip.rider_id !== S.user.id && $('#cancelBtn')) $('#cancelBtn').onclick = async () => {
           if (!(await confirmBox('تنسحب من الطرحة؟', 'السواق والركاب التانيين بيكملوا من غيرك.', 'انسحاب', true))) return;
           const ok = await safe(() => rpc('leave_shared_trip', { p_trip: id })); if (ok !== undefined) home();
         };
-        $('#shareBtn').onclick = () => shareTrip(trip, drv);
+        $('#shareBtn').onclick = () => openSafety(trip, drv);
         trip.rider_id === S.user.id && $('#cancelBtn') && ($('#cancelBtn').onclick = async () => {
           if (!(await confirmBox('تلغي المشوار؟', 'السواق جاي في الطريق ليك. لو لغيت كتير تقييمك ممكن يتأثر.', 'إلغاء', true))) return;
           const ok = await safe(() => rpc('set_trip_status', { p_trip: id, p_status: 'cancelled', p_reason: 'rider_cancel' }));
@@ -1086,7 +1084,7 @@ Screens.rating = ({ id }) => {
         <label for="note" class="sr">ملاحظة</label><input class="input" id="note" placeholder="أضف ملاحظة (اختياري)" style="height:48px">
       </div>
       <div class="row gap8"><button class="btn ghost" id="skip" style="width:96px">تخطي</button><button class="btn" id="send" disabled>أرسل التقييم</button></div>
-      <button class="btn danger" id="rateReport" style="color:var(--ink3)">${icon('flag')}حصلت مشكلة؟ بلّغ</button>
+      <div id="rateIssues" class="col gap8"></div>
     </div></div>`,
     async mount() {
       const trip = await safe(() => getTrip(id));
@@ -1112,9 +1110,22 @@ Screens.rating = ({ id }) => {
       $$('[data-s]').forEach(b => b.onclick = () => { stars = +b.dataset.s; haptic(); paint(); });
       $$('[data-t]').forEach(b => b.onclick = () => { const t = b.dataset.t; tags.has(t) ? tags.delete(t) : tags.add(t); b.classList.toggle('on'); b.setAttribute('aria-pressed', tags.has(t)); });
       $('#skip').onclick = home;
-      $('#rateReport').onclick = () => openReport({ tripId: id, reportedId: otherId, reportedName: o.full_name });
-      const pa = () => { if (stars <= 2) $('#rateReport').style.color = 'var(--red)'; };
-      $$('[data-s]').forEach(b => b.addEventListener('click', pa));
+      // مشاكل بعد المشوار: مختلفة للراكب والسواق، وبتظهر أكتر لما التقييم ضعيف
+      const role = iAmRider ? 'rider' : 'driver';
+      const quick = iAmRider ? ['overcharge', 'route', 'behavior', 'dangerous_driving'] : ['underpaid', 'behavior', 'damage', 'extra_riders'];
+      const paintIssues = () => {
+        const box = $('#rateIssues'); if (!box) return;
+        const low = stars <= 3;
+        box.innerHTML = `
+          ${low ? `<div class="card col gap8" style="border:1px solid #F3C7C3;background:var(--red-soft)"><b style="font-size:14px">شنو الما عجبك؟</b>
+            <div class="row gap8" style="flex-wrap:wrap">${quick.map(k => `<button type="button" class="chip" data-iss="${k}" style="background:#fff">${icon(catInfo(k)[0], '', 'font-size:16px')}${catInfo(k)[1]}</button>`).join('')}
+            <button type="button" class="chip" data-iss="" style="background:#fff">${icon('more_horiz', '', 'font-size:16px')}غيره</button></div></div>` : ''}
+          ${iAmRider ? `<button type="button" class="btn danger" data-iss="lost_item" style="color:var(--ink2)">${icon('work')}نسيت حاجة في الركشة؟</button>`
+                     : `<button type="button" class="btn danger" data-iss="no_payment" style="color:var(--ink2)">${icon('money_off')}الراكب ما دفع؟</button>`}`;
+        $$('[data-iss]', box).forEach(b => b.onclick = () => openReport({ tripId: id, reportedId: otherId, reportedName: o.full_name, role, context: 'after', cat: b.dataset.iss || null }));
+      };
+      paintIssues();
+      $$('[data-s]').forEach(b => b.addEventListener('click', paintIssues));
       $('#send').disabled = false;
       $('#send').onclick = async () => {
         const ok = await safe(async () => {
@@ -1171,11 +1182,11 @@ Screens.history = ({ filter = 'all' } = {}) => ({
           <div class="col grow"><b style="font-size:15px">${esc(t.dropoff_address || 'مشوار')}</b><span class="small muted">${timeStr(t.created_at)} · ${num((+t.distance_km || 0).toFixed(1))} كم</span></div>
           <div class="col gap4" style="align-items:flex-start"><b>${done ? money(t.final_price) : '—'}</b><span class="pill ${done ? 'green' : 'red'}">${done ? 'مكتمل' : 'ملغي'}</span></div></div>
         <div class="row small muted gap4" style="border-top:1px dashed var(--line);padding-top:10px">${icon('trip_origin', '', 'font-size:16px')}<span class="grow">${esc(t.pickup_address || '')}</span>
-          ${t.driver_id ? `<button class="chip" data-rp="${t.id}" style="height:32px;font-size:12px">${icon('flag', '', 'font-size:14px')}إبلاغ</button>` : ''}</div></div>`;
+          ${t.driver_id ? `<button class="chip" data-rp="${t.id}" style="height:32px;font-size:12px">${icon(S.mode === 'driver' ? 'report' : 'help', '', 'font-size:14px')}${S.mode === 'driver' ? 'مشكلة مع الراكب' : 'مساعدة'}</button>` : ''}</div></div>`;
     }).join('');
     $$('[data-rp]').forEach(b => b.onclick = () => {
       const t = tmap[b.dataset.rp], other = S.user.id === t.driver_id ? t.rider_id : t.driver_id;
-      openReport({ tripId: t.id, reportedId: other });
+      openReport({ tripId: t.id, reportedId: other, role: S.user.id === t.driver_id ? 'driver' : 'rider', context: 'after' });
     });
   }
 });
@@ -1544,10 +1555,20 @@ Screens.driverTrip = ({ id }) => {
             <a class="act" href="tel:${esc(rider.phone || '')}">${icon('call')}اتصال</a>
           </div>
           ${nx ? `<button class="btn ${trip.status === 'in_progress' ? 'yellow' : ''}" id="nextBtn" style="height:60px">${icon(nx[1])}${nx[2]}</button>` : ''}
+          ${trip.status === 'arrived' ? `<button class="btn ghost" id="noShowBtn">${icon('person_off')}الراكب ما حضر</button>` : ''}
           <div class="row gap8">${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon('close')}إلغاء المشوار</button>` : ''}
-            <button class="btn danger" id="reportBtn" style="color:var(--ink3)">${icon('flag')}إبلاغ</button></div>`;
+            <button class="btn danger" id="reportBtn" style="color:var(--ink3)">${icon('report')}مشكلة مع الراكب</button></div>`;
         $('#chatBtn').onclick = () => go('chat', { id });
-        $('#reportBtn').onclick = () => openReport({ tripId: id, reportedId: trip.rider_id, reportedName: rider.full_name });
+        const people = trip.is_shared && shares.length ? shares.map(x => ({ id: x.rider_id, name: x.full_name })) : null;
+        $('#reportBtn').onclick = () => openReport({ tripId: id, reportedId: trip.rider_id, reportedName: rider.full_name, role: 'driver', context: 'live', people });
+        $('#noShowBtn') && ($('#noShowBtn').onclick = async () => {
+          if (!(await confirmBox('الراكب ما حضر؟', 'اتصل بيه أول. لو انتظرت كفاية، بنلغي المشوار ونسجّل إنه ما حضر.', 'ما حضر — إلغاء', true))) return;
+          const ok = await safe(async () => {
+            await sb.from('reports').insert({ trip_id: id, reporter_id: S.user.id, reported_id: trip.rider_id, category: 'rider_no_show', reporter_role: 'driver' });
+            await rpc('set_trip_status', { p_trip: id, p_status: 'cancelled', p_reason: 'rider_no_show' }); return true;
+          }, 'اتسجّل — المشوار اتلغى');
+          if (ok) home();
+        });
         $('#recenter').onclick = () => { follow = true; refreshRoute(); if (lastPos) map.setView(lastPos, 17); };
         refreshRoute();
         $('#nextBtn') && ($('#nextBtn').onclick = async (e) => {
@@ -1662,47 +1683,97 @@ async function renderSub() {
 
 
 
-/* ---------- نظام البلاغات ---------- */
-const REPORT_CATS = [
-  ['safety', 'gpp_maybe', 'خطر على السلامة'], ['harassment', 'front_hand', 'تحرش أو إساءة'],
-  ['price', 'payments', 'مشكلة في السعر أو الدفع'], ['behavior', 'sentiment_dissatisfied', 'سلوك سيء'],
-  ['route', 'alt_route', 'طريق طويل أو غلط'], ['vehicle', 'electric_rickshaw', 'حالة الركشة'],
-  ['no_show', 'person_off', 'ما حضر أو اتأخر كتير'], ['other', 'more_horiz', 'حاجة تانية']
-];
+/* ---------- نظام البلاغات (مختلف للراكب والسواق) ---------- */
+// [المفتاح، الأيقونة، العنوان، وصف قصير]
+const RC = {
+  dangerous_driving: ['speed', 'سواقة متهورة أو خطرة', 'سرعة عالية، تهوّر، أو سواقة وهو ما مركّز'],
+  harassment: ['front_hand', 'تحرش أو مضايقة', 'كلام أو تصرف ما لائق'],
+  wrong_vehicle: ['no_crash', 'الركشة أو السواق مختلف', 'اللوحة أو الصورة ما زي التطبيق'],
+  overcharge: ['payments', 'طلب قروش زيادة', 'أكتر من السعر المتفق عليه'],
+  route: ['alt_route', 'لف أو طريق غلط', 'طوّل الطريق أو مشى بعيد عن الوجهة'],
+  lost_item: ['work', 'نسيت حاجة في الركشة', 'شنطة، موبايل، أو أي غرض'],
+  behavior: ['sentiment_dissatisfied', 'سلوك سيء أو ألفاظ', 'إساءة أو قلة احترام'],
+  vehicle: ['electric_rickshaw', 'الركشة متسخة أو خربانة', 'حالة الركشة ما كويسة'],
+  driver_late: ['schedule', 'اتأخر كتير أو ما جا', 'انتظرت وقت طويل'],
+  rider_no_show: ['person_off', 'الراكب ما حضر', 'وصلت وانتظرت وما جا'],
+  no_payment: ['money_off', 'الراكب ما دفع', 'نزل من غير ما يدفع'],
+  underpaid: ['price_change', 'دفع أقل من المتفق', 'المبلغ ناقص'],
+  damage: ['car_crash', 'خرّب حاجة في الركشة', 'كسر أو وسّخ الركشة'],
+  extra_riders: ['groups', 'ركاب أكتر من المتفق', 'ركب ناس زيادة'],
+  fake_request: ['block', 'طلب وهمي أو مزعج', 'طلب وما كان جاد'],
+  safety: ['gpp_maybe', 'حاسس بخطر', 'موقف غير آمن'],
+  price: ['payments', 'مشكلة في السعر أو الدفع', ''], no_show: ['person_off', 'ما حضر', ''],
+  other: ['more_horiz', 'حاجة تانية', 'اكتب لينا التفاصيل']
+};
+const REPORT_SETS = {
+  rider: { live: ['dangerous_driving', 'harassment', 'wrong_vehicle', 'overcharge', 'route', 'other'],
+           after: ['overcharge', 'lost_item', 'route', 'behavior', 'dangerous_driving', 'harassment', 'vehicle', 'driver_late', 'other'] },
+  driver: { live: ['behavior', 'extra_riders', 'safety', 'harassment', 'other'],
+            after: ['no_payment', 'underpaid', 'damage', 'behavior', 'harassment', 'fake_request', 'other'] }
+};
+const REPORT_CATS = Object.entries(RC).map(([k, v]) => [k, v[0], v[1]]);
 const REPORT_ST = { new: ['yellow', 'جديد'], reviewing: ['grey', 'قيد المراجعة'], resolved: ['green', 'اتحل'], dismissed: ['red', 'مرفوض'] };
-function openReport({ tripId = null, reportedId = null, reportedName = '' } = {}) {
-  let cat = null, file = null;
-  modal(`<div class="row gap8">${icon('flag', 'f', 'color:var(--red)')}<h2 style="margin:0;font-size:20px">بلاغ${reportedName ? ' عن ' + esc(reportedName) : ''}</h2></div>
-    <div class="card row gap8" style="background:var(--red-soft);align-items:flex-start;padding:10px 12px">${icon('emergency', '', 'color:var(--red);font-size:20px')}
-      <span class="small" style="color:#7A271A;line-height:1.6">لو في خطر حالاً، اتصل بالشرطة على <a href="tel:999" style="color:#7A271A;font-weight:700">٩٩٩</a> أول.</span></div>
-    <b style="font-size:14px">نوع المشكلة</b>
-    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">${REPORT_CATS.map(([k, ic, l]) =>
-      `<button type="button" class="chip" data-cat="${k}" aria-pressed="false" style="height:auto;min-height:44px;padding:8px 10px;border-radius:14px;justify-content:flex-start;text-align:right">${icon(ic, '', 'font-size:18px')}${l}</button>`).join('')}</div>
-    <div class="field"><label for="rpD">التفاصيل</label>
-      <textarea class="input" id="rpD" rows="3" style="height:auto;padding:12px 16px;resize:none" placeholder="احكي لينا الحصل…"></textarea></div>
-    <label class="doc" id="rpImgL" style="padding:10px 14px"><span class="rk" style="width:40px;height:40px">${icon('add_a_photo')}</span><span class="col grow"><b style="font-size:14px">صورة (اختياري)</b><span class="small muted" id="rpImgT">إثبات أو صورة للمشكلة</span></span><input type="file" accept="image/*" id="rpImg"></label>
-    <button class="btn" id="rpSend" style="background:var(--red)">إرسال البلاغ</button>
-    <p class="small muted" style="margin:0;text-align:center">بلاغك سري — ${reportedName ? 'الطرف التاني ما بيعرف إنك بلّغت' : 'فريق ركشتي بس بيشوفه'}</p>`,
-  (o, close) => {
-    $$('[data-cat]', o).forEach(b => b.onclick = () => {
-      cat = b.dataset.cat;
-      $$('[data-cat]', o).forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
-    });
-    $('#rpImg', o).onchange = (e) => { file = e.target.files[0]; if (file) { $('#rpImgT', o).textContent = 'اتختارت الصورة'; $('#rpImgL', o).classList.add('done'); } };
-    $('#rpSend', o).onclick = async (e) => {
-      const btn = e.currentTarget;
-      if (!cat) return toast('اختار نوع المشكلة', 'error');
-      const details = $('#rpD', o).value.trim();
-      if (cat === 'other' && details.length < 5) return toast('اكتب تفاصيل المشكلة', 'error');
-      btn.disabled = true;
-      const ok = await safe(async () => {
-        let image_path = null;
-        if (file) image_path = await uploadImage('reports', `${S.user.id}/${Date.now()}.jpg`, file);
-        const { error } = await sb.from('reports').insert({ trip_id: tripId, reporter_id: S.user.id, reported_id: reportedId, category: cat, details: details || null, image_path });
-        if (error) throw error; return true;
-      }, 'البلاغ وصل — بنراجعه ونتواصل معاك');
-      if (ok) close(); else btn.disabled = false;
+const catInfo = (k) => RC[k] || RC.other;
+
+// role: rider|driver — context: live (أثناء المشوار) | after (بعد المشوار) — cat: نوع جاهز (اختياري) — people: ركاب الطرحة للسواق
+function openReport({ tripId = null, reportedId = null, reportedName = '', role = 'rider', context = 'after', cat = null, people = null } = {}) {
+  let file = null, target = reportedId;
+  const set = REPORT_SETS[role][context];
+  const urgent = role === 'rider' && context === 'live';
+  const step1 = () => `
+    <div class="row gap8">${icon(role === 'driver' ? 'report' : 'flag', 'f', 'color:var(--red)')}<h2 style="margin:0;font-size:20px">${role === 'driver' ? 'مشكلة مع الراكب' : context === 'live' ? 'مشكلة في المشوار' : 'شنو الحصل؟'}</h2></div>
+    ${urgent ? `<a href="tel:999" class="card row gap8" style="background:var(--red);color:#fff;text-decoration:none;padding:12px 14px">${icon('emergency', 'f', 'font-size:22px')}<span class="col grow"><b>في خطر حالاً؟</b><span class="small" style="opacity:.9">اتصل بالشرطة ٩٩٩</span></span>${icon('call', 'f')}</a>` : ''}
+    <div class="col gap8">${set.map(k => { const [ic, t, h] = catInfo(k); return `
+      <button type="button" class="list-btn" data-cat="${k}" style="border:1px solid var(--line);padding:12px">
+        <span class="rk" style="width:40px;height:40px;border-radius:12px;background:${['dangerous_driving', 'harassment', 'safety'].includes(k) ? 'var(--red-soft)' : 'var(--bg)'}">${icon(ic, '', `font-size:22px;color:${['dangerous_driving', 'harassment', 'safety'].includes(k) ? 'var(--red)' : 'var(--ink)'}`)}</span>
+        <span class="col grow"><b style="font-size:15px">${t}</b>${h ? `<span class="small muted">${h}</span>` : ''}</span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>`; }).join('')}</div>`;
+  const step2 = (k) => { const [ic, t] = catInfo(k); const need = ['other', 'lost_item'].includes(k); return `
+    <div class="row gap8"><button type="button" class="icon-btn" id="rpBack" aria-label="رجوع">${icon('arrow_forward')}</button>
+      <span class="rk" style="width:40px;height:40px;border-radius:12px;background:var(--bg)">${icon(ic, '', 'font-size:22px')}</span><b style="font-size:17px" class="grow">${t}</b></div>
+    ${people && people.length > 1 ? `<div class="col gap8"><b style="font-size:14px">المشكلة مع منو؟</b><div class="row gap8" style="flex-wrap:wrap">${people.map(p => `<button type="button" class="chip ${p.id === target ? 'on' : ''}" data-who="${p.id}">${esc(p.name || 'راكب')}</button>`).join('')}</div></div>` : ''}
+    <div class="field"><label for="rpD">${k === 'lost_item' ? 'شنو الحاجة النسيتها؟' : need ? 'احكي لينا الحصل' : 'تفاصيل (اختياري)'}</label>
+      <textarea class="input" id="rpD" rows="3" style="height:auto;padding:12px 16px;resize:none" placeholder="${k === 'lost_item' ? 'مثلاً: شنطة سوداء فيها…' : 'اكتب باختصار…'}"></textarea></div>
+    ${k !== 'lost_item' ? `<label class="doc" id="rpImgL" style="padding:10px 14px"><span class="rk" style="width:40px;height:40px">${icon('add_a_photo')}</span><span class="col grow"><b style="font-size:14px">صورة (اختياري)</b><span class="small muted" id="rpImgT">لو عندك إثبات</span></span><input type="file" accept="image/*" id="rpImg"></label>` : ''}
+    <button class="btn" id="rpSend" style="background:${k === 'lost_item' ? 'var(--ink)' : 'var(--red)'}">${k === 'lost_item' ? 'أرسل — بنتواصل مع السواق' : 'إرسال البلاغ'}</button>
+    <p class="small muted" style="margin:0;text-align:center">${k === 'lost_item' ? 'فريق ركشتي بيتواصل مع السواق ويرجع ليك' : 'بلاغك سري — الطرف التاني ما بيعرف إنك بلّغت'}</p>`; };
+  modal(`<div id="rpBody"></div>`, (o, close) => {
+    const body = $('#rpBody', o);
+    body.className = 'col gap12';
+    const show1 = () => { body.innerHTML = step1(); $$('[data-cat]', body).forEach(b => b.onclick = () => show2(b.dataset.cat)); };
+    const show2 = (k) => {
+      body.innerHTML = step2(k); file = null;
+      $('#rpBack', body).onclick = cat ? close : show1;
+      $$('[data-who]', body).forEach(b => b.onclick = () => { target = b.dataset.who; $$('[data-who]', body).forEach(x => x.classList.toggle('on', x === b)); });
+      const fi = $('#rpImg', body); fi && (fi.onchange = (e) => { file = e.target.files[0]; if (file) { $('#rpImgT', body).textContent = 'اتختارت الصورة'; $('#rpImgL', body).classList.add('done'); } });
+      $('#rpSend', body).onclick = async (e) => {
+        const btn = e.currentTarget, details = $('#rpD', body).value.trim();
+        if (['other', 'lost_item'].includes(k) && details.length < 3) return toast(k === 'lost_item' ? 'اكتب الحاجة النسيتها' : 'اكتب التفاصيل', 'error');
+        btn.disabled = true;
+        const ok = await safe(async () => {
+          let image_path = null;
+          if (file) image_path = await uploadImage('reports', `${S.user.id}/${Date.now()}.jpg`, file);
+          const { error } = await sb.from('reports').insert({ trip_id: tripId, reporter_id: S.user.id, reported_id: tripId ? target : null, category: k, details: details || null, image_path, reporter_role: role });
+          if (error) throw error; return true;
+        }, k === 'lost_item' ? 'وصلنا — بنتواصل مع السواق' : 'البلاغ وصل — بنراجعه ونتواصل معاك');
+        if (ok) close(); else btn.disabled = false;
+      };
     };
+    cat ? show2(cat) : show1();
+  });
+}
+
+// نافذة الأمان للراكب أثناء المشوار
+function openSafety(trip, drv) {
+  modal(`<div class="row gap8">${icon('shield', 'f', 'color:var(--green)')}<h2 style="margin:0;font-size:20px">الأمان</h2></div>
+    <a href="tel:999" class="list-btn" style="background:var(--red);color:#fff;text-decoration:none">${icon('emergency', 'f')}<span class="col grow"><b>اتصل بالشرطة ٩٩٩</b><span class="small" style="opacity:.9">لو في خطر حالاً</span></span></a>
+    <button class="list-btn" id="sfShare" style="border:1px solid var(--line)">${icon('share_location')}<span class="col grow"><b>شارك رحلتك</b><span class="small muted">رسّل مكان الركشة ورقم اللوحة لأهلك</span></span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>
+    <div class="card row gap12" style="background:#F4F6F5">
+      ${drv.plate_number ? `<div class="plate"><span>السودان</span><span>${esc(drv.plate_number)}</span></div>` : ''}
+      <span class="small" style="line-height:1.6">اتأكد إن اللوحة وصورة السواق زي التطبيق قبل ما تركب.</span></div>
+    <button class="list-btn" id="sfReport" style="border:1px solid var(--line)">${icon('flag', '', 'color:var(--red)')}<span class="col grow"><b>بلّغ عن مشكلة في المشوار</b><span class="small muted">سواقة خطرة، مضايقة، أو ركشة مختلفة</span></span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>`,
+  (o, close) => {
+    $('#sfShare', o).onclick = () => { close(); shareTrip(trip, drv); };
+    $('#sfReport', o).onclick = () => { close(); openReport({ tripId: trip.id, reportedId: trip.driver_id, reportedName: drv.full_name, role: 'rider', context: 'live' }); };
   });
 }
 
@@ -1713,13 +1784,13 @@ Screens.myReports = () => ({
     <div class="scroll pad col gap8" id="rpList"><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div></div>`,
   async mount(root) {
     bindBack(root);
-    $('#newRp').onclick = () => openReport();
+    $('#newRp').onclick = () => openReport({ role: S.mode === 'driver' ? 'driver' : 'rider', context: 'after', cat: 'other' });
     const { data } = await sb.from('reports').select('*').eq('reporter_id', S.user.id).order('created_at', { ascending: false });
     const list = data || [];
     const box = $('#rpList'); if (!box) return;
     if (!list.length) { box.innerHTML = `<div class="empty">${icon('flag')}<b>ما عندك بلاغات</b><span class="small">لو حصلت مشكلة في مشوار، بلّغ من شاشة المشوار أو من سجل مشاويرك</span></div>`; return; }
     box.innerHTML = list.map(r => {
-      const c = REPORT_CATS.find(x => x[0] === r.category) || REPORT_CATS[7], st = REPORT_ST[r.status];
+      const ci = catInfo(r.category), c = [r.category, ci[0], ci[1]], st = REPORT_ST[r.status];
       return `<div class="card col gap8"><div class="row gap8">${icon(c[1], '', 'color:var(--red)')}<b class="grow">${c[2]}</b><span class="pill ${st[0]}">${st[1]}</span></div>
         ${r.details ? `<span class="small" style="line-height:1.6">${esc(r.details)}</span>` : ''}
         <span class="small muted">${new Date(r.created_at).toLocaleString('ar-EG')}</span>
@@ -1861,12 +1932,12 @@ Screens.admin = ({ tab = 'support' } = {}) => ({
         const urls = {}; await Promise.all(list.filter(r => r.image_path).map(async r => { urls[r.id] = (await sb.storage.from('reports').createSignedUrl(r.image_path, 3600)).data?.signedUrl; }));
         if (!$('#adm')) return;
         box.innerHTML = list.map(r => {
-          const c = REPORT_CATS.find(x => x[0] === r.category) || REPORT_CATS[7], st = REPORT_ST[r.status];
+          const ci = catInfo(r.category), c = [r.category, ci[0], ci[1]], st = REPORT_ST[r.status];
           const rep_ = pm[r.reporter_id] || {}, tgt = pm[r.reported_id], drv = dm[r.reported_id], n = cm[r.reported_id];
           const open = ['new', 'reviewing'].includes(r.status);
-          return `<div class="card col gap8" style="${r.category === 'safety' || r.category === 'harassment' ? 'border:2px solid var(--red)' : ''}">
+          return `<div class="card col gap8" style="${['safety', 'harassment', 'dangerous_driving'].includes(r.category) ? 'border:2px solid var(--red)' : ''}">
             <div class="row gap8">${icon(c[1], '', 'color:var(--red)')}<b class="grow">${c[2]}</b><span class="pill ${st[0]}">${st[1]}</span></div>
-            <span class="small">من: <b>${esc(rep_.full_name || '')}</b> <a href="tel:${esc(rep_.phone || '')}" style="direction:ltr">${esc(rep_.phone || '')}</a></span>
+            <span class="small">من: <b>${esc(rep_.full_name || '')}</b> ${r.reporter_role ? `<span class="pill grey">${r.reporter_role === 'driver' ? 'سواق' : 'راكب'}</span>` : ''} <a href="tel:${esc(rep_.phone || '')}" style="direction:ltr">${esc(rep_.phone || '')}</a></span>
             ${tgt ? `<span class="small">ضد: <b>${esc(tgt.full_name || '')}</b> ${drv ? '(سواق)' : '(راكب)'} <a href="tel:${esc(tgt.phone || '')}" style="direction:ltr">${esc(tgt.phone || '')}</a>
               ${n && n.total > 1 ? `<span class="pill red">${num(n.total)} بلاغات ضده</span>` : ''}</span>` : '<span class="small muted">بلاغ عام (بدون مشوار)</span>'}
             ${r.details ? `<span style="font-size:14px;line-height:1.6;background:#F4F6F5;border-radius:12px;padding:10px">${esc(r.details)}</span>` : ''}
