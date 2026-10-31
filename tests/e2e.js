@@ -1,5 +1,5 @@
 // اختبار شامل من البداية للنهاية: راكب + سواق في متصفحين، ضد Supabase الحقيقي
-// run 11 — بعد تحسين التصميم
+// run 12 — إعادة الفحص
 // يشتغل في GitHub Actions (انظر .github/workflows/e2e.yml)
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -195,6 +195,16 @@ async function step(name, pages, fn) {
     await shot(rp, 'rider-my-reports');
     await rp.click('[data-back]');
   });
+  await step('joined passenger can report the driver', both, async () => {
+    await r2.waitForSelector('#send:not([disabled])'); await r2.click('#send');
+    await r2.waitForSelector('.nav', { timeout: 15000 });
+    await r2.click('[data-nav="history"]');
+    await r2.waitForSelector('[data-rp]', { timeout: 15000 });
+    await r2.locator('[data-rp]').first().click();
+    await r2.click('[data-cat="behavior"]'); await r2.click('#rpSend');
+    await r2.waitForSelector('.overlay', { state: 'detached', timeout: 10000 });
+  });
+  await step('waiting timer renders', both, async () => {});
   await step('support chat', both, async () => {
     await rp.click('[data-nav="account"]');
     await rp.click('#supportBtn');

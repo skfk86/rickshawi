@@ -764,7 +764,7 @@ Screens.waiting = ({ id }) => ({
         <div class="pulse">${icon('electric_rickshaw', 'f', 'font-size:42px')}</div>
         <h2 class="h1" style="font-size:22px;margin-top:20px">بنرسل طلبك للركشات القريبة</h2>
         <p class="muted" style="margin:0" id="tripInfo">…</p>
-        <div class="row gap4 small muted" id="wTimer">${icon('timer', '', 'font-size:16px')}<span>0:00</span></div>
+        <div class="row gap4 small muted">${icon('timer', '', 'font-size:16px')}<span id="wTimer">0:00</span></div>
       </div>
       <div class="route-box" id="wRoute" style="display:none"></div>
       <div id="wShares"></div>
@@ -837,7 +837,7 @@ Screens.waiting = ({ id }) => ({
       home();
     }, Math.max(1000, 15 * 60000 - (Date.now() - new Date(trip.created_at))));
     onLeave(() => clearTimeout(expire));
-    every(1000, () => { const t = Math.floor((Date.now() - new Date(trip.created_at)) / 1000); const el = $('#wTimer span'); if (el) el.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; });
+    every(1000, () => { const t = Math.floor((Date.now() - new Date(trip.created_at)) / 1000); const el = $('#wTimer'); if (el) el.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; });
     $('#cancel').onclick = async () => {
       if (!(await confirmBox('تلغي الطلب؟', 'السواقين ما حيشوفوا طلبك تاني.', 'إلغاء الطلب', true))) return;
       const ok = await safe(() => rpc('set_trip_status', { p_trip: id, p_status: 'cancelled', p_reason: 'rider_cancel' }));
