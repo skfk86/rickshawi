@@ -1,5 +1,5 @@
 // اختبار شامل من البداية للنهاية: راكب + سواق في متصفحين، ضد Supabase الحقيقي
-// run 5
+// run 6
 // يشتغل في GitHub Actions (انظر .github/workflows/e2e.yml)
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -58,7 +58,8 @@ async function step(name, pages, fn) {
     await dp.waitForSelector('#onlineBtn', { timeout: 20000 });
   });
   await step('driver goes online', both, async () => {
-    await dp.click('#onlineBtn');
+    await dp.waitForTimeout(1500);
+    if ((await dp.textContent('#onLbl')) !== 'متاح') await dp.click('#onlineBtn');
     await dp.waitForFunction(() => document.querySelector('#onLbl')?.textContent === 'متاح', null, { timeout: 15000 });
     await dp.waitForTimeout(2500); await shot(dp, 'driver-online');
   });
