@@ -789,8 +789,10 @@ Screens.tracking = ({ id }) => {
           </div>
           ${trip.status === 'in_progress' ? meterHtml(trip, +trip.traveled_km || 0) : ''}
           <div class="row gap8 card" style="background:#F4F6F5">${icon('flag', '', 'color:var(--ink3)')}<span class="grow" style="font-size:14px">${esc(trip.dropoff_address || 'الوجهة')}</span><b class="row gap4">${icon('payments', '', 'font-size:18px;color:var(--green)')}${money(trip.final_price || trip.offered_price)}</b></div>
-          ${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon('close')}إلغاء المشوار</button>` : ''}`;
+          <div class="row gap8">${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon('close')}إلغاء المشوار</button>` : ''}
+            <button class="btn danger" id="reportBtn" style="color:var(--ink3)">${icon('flag')}إبلاغ</button></div>`;
         $('#chatBtn').onclick = () => go('chat', { id });
+        $('#reportBtn').onclick = () => openReport({ tripId: id, reportedId: trip.driver_id, reportedName: drv.full_name });
         $('#shareBtn').onclick = () => shareTrip(trip, drv);
         $('#cancelBtn') && ($('#cancelBtn').onclick = async () => {
           if (!(await confirmBox('تلغي المشوار؟', 'السواق جاي في الطريق ليك. لو لغيت كتير تقييمك ممكن يتأثر.', 'إلغاء', true))) return;
@@ -932,6 +934,7 @@ Screens.rating = ({ id }) => {
         <label for="note" class="sr">ملاحظة</label><input class="input" id="note" placeholder="أضف ملاحظة (اختياري)" style="height:48px">
       </div>
       <div class="row gap8"><button class="btn ghost" id="skip" style="width:96px">تخطي</button><button class="btn" id="send" disabled>أرسل التقييم</button></div>
+      <button class="btn danger" id="rateReport" style="color:var(--ink3)">${icon('flag')}حصلت مشكلة؟ بلّغ</button>
     </div></div>`,
     async mount() {
       const trip = await safe(() => getTrip(id));
@@ -955,6 +958,9 @@ Screens.rating = ({ id }) => {
       $$('[data-s]').forEach(b => b.onclick = () => { stars = +b.dataset.s; haptic(); paint(); });
       $$('[data-t]').forEach(b => b.onclick = () => { const t = b.dataset.t; tags.has(t) ? tags.delete(t) : tags.add(t); b.classList.toggle('on'); b.setAttribute('aria-pressed', tags.has(t)); });
       $('#skip').onclick = home;
+      $('#rateReport').onclick = () => openReport({ tripId: id, reportedId: otherId, reportedName: o.full_name });
+      const pa = () => { if (stars <= 2) $('#rateReport').style.color = 'var(--red)'; };
+      $$('[data-s]').forEach(b => b.addEventListener('click', pa));
       $('#send').disabled = false;
       $('#send').onclick = async () => {
         const ok = await safe(async () => {
@@ -995,6 +1001,7 @@ Screens.history = ({ filter = 'all' } = {}) => ({
       <div class="stat">${icon('payments', '', 'font-size:20px;color:var(--green)')}<b>${num(sum)}</b><span class="small muted">جنيه ${S.mode === 'driver' ? 'دخل' : 'صرفتها'}</span></div>
       <div class="stat">${icon('route', '', 'font-size:20px;color:var(--blue)')}<b>${num(Math.round(kms))} كم</b><span class="small muted">مسافة</span></div></div>`;
     if (!trips.length) { $('#hList').innerHTML = `<div class="empty">${icon('receipt_long')}<b>لسه ما عندك مشاوير</b><span class="small">أول مشوار بيظهر هنا</span></div>`; return; }
+    const tmap = {}; trips.forEach(t => tmap[t.id] = t);
     let lastDay = '';
     $('#hList').innerHTML = trips.map(t => {
       const d = dayStr(t.created_at); const head = d !== lastDay ? `<span class="small muted" style="font-weight:600;margin-top:6px">${d}</span>` : ''; lastDay = d;
@@ -1003,8 +1010,13 @@ Screens.history = ({ filter = 'all' } = {}) => ({
         <div class="row gap8"><span class="rk" style="width:40px;height:40px;border-radius:12px;background:var(--yellow-soft)">${icon('electric_rickshaw', 'f', 'font-size:22px')}</span>
           <div class="col grow"><b style="font-size:15px">${esc(t.dropoff_address || 'مشوار')}</b><span class="small muted">${timeStr(t.created_at)} · ${num((+t.distance_km || 0).toFixed(1))} كم</span></div>
           <div class="col gap4" style="align-items:flex-start"><b>${done ? money(t.final_price) : '—'}</b><span class="pill ${done ? 'green' : 'red'}">${done ? 'مكتمل' : 'ملغي'}</span></div></div>
-        <div class="row small muted gap4" style="border-top:1px dashed var(--line);padding-top:10px">${icon('trip_origin', '', 'font-size:16px')}<span class="grow">${esc(t.pickup_address || '')}</span></div></div>`;
+        <div class="row small muted gap4" style="border-top:1px dashed var(--line);padding-top:10px">${icon('trip_origin', '', 'font-size:16px')}<span class="grow">${esc(t.pickup_address || '')}</span>
+          ${t.driver_id ? `<button class="chip" data-rp="${t.id}" style="height:32px;font-size:12px">${icon('flag', '', 'font-size:14px')}إبلاغ</button>` : ''}</div></div>`;
     }).join('');
+    $$('[data-rp]').forEach(b => b.onclick = () => {
+      const t = tmap[b.dataset.rp], other = S.user.id === t.rider_id ? t.driver_id : t.rider_id;
+      openReport({ tripId: t.id, reportedId: other });
+    });
   }
 });
 
@@ -1025,6 +1037,7 @@ Screens.account = () => ({
     ${S.profile?.role === 'admin' ? `<button class="list-btn" id="adminBtn" style="background:var(--yellow-soft)">${icon('admin_panel_settings')}<span class="grow"><b>لوحة الإدارة</b><br><span class="small muted">قبول السواقين، الاشتراكات، الأسعار</span></span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>` : ''}
     <div class="col gap8">
       <button class="list-btn" id="supportBtn">${icon('support_agent')}<span class="grow col"><span>الدعم والمساعدة</span><span class="small muted">دردش مع فريق ركشتي</span></span><span id="supBadge"></span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>
+      <button class="list-btn" id="myRpBtn">${icon('flag')}<span class="grow">بلاغاتي</span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>
       <button class="list-btn" id="logout" style="color:var(--red)">${icon('logout')}<span class="grow">تسجيل خروج</span></button>
     </div>
     <p class="small muted" style="text-align:center">ركشتي · الإصدار ١٫٠</p>
@@ -1060,6 +1073,7 @@ Screens.account = () => ({
     const bd = $('#becomeDriver'); bd && (bd.onclick = () => go('driverSignup'));
     const ad = $('#adminBtn'); ad && (ad.onclick = () => go('admin'));
     $('#supportBtn').onclick = () => go('support');
+    $('#myRpBtn').onclick = () => go('myReports');
     sb.from('support_threads').select('unread_user').eq('user_id', S.user.id).maybeSingle().then(({ data }) => {
       if (data && data.unread_user && $('#supBadge')) $('#supBadge').innerHTML = `<span class="pill yellow" style="background:var(--yellow);color:var(--ink)">${num(data.unread_user)}</span>`;
     });
@@ -1339,8 +1353,10 @@ Screens.driverTrip = ({ id }) => {
             <a class="act" href="tel:${esc(rider.phone || '')}">${icon('call')}اتصال</a>
           </div>
           ${nx ? `<button class="btn ${trip.status === 'in_progress' ? 'yellow' : ''}" id="nextBtn" style="height:60px">${icon(nx[1])}${nx[2]}</button>` : ''}
-          ${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon('close')}إلغاء المشوار</button>` : ''}`;
+          <div class="row gap8">${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon('close')}إلغاء المشوار</button>` : ''}
+            <button class="btn danger" id="reportBtn" style="color:var(--ink3)">${icon('flag')}إبلاغ</button></div>`;
         $('#chatBtn').onclick = () => go('chat', { id });
+        $('#reportBtn').onclick = () => openReport({ tripId: id, reportedId: trip.rider_id, reportedName: rider.full_name });
         $('#recenter').onclick = () => { follow = true; refreshRoute(); if (lastPos) map.setView(lastPos, 17); };
         refreshRoute();
         $('#nextBtn') && ($('#nextBtn').onclick = async (e) => {
@@ -1451,6 +1467,73 @@ async function renderSub() {
 
 
 
+
+/* ---------- نظام البلاغات ---------- */
+const REPORT_CATS = [
+  ['safety', 'gpp_maybe', 'خطر على السلامة'], ['harassment', 'front_hand', 'تحرش أو إساءة'],
+  ['price', 'payments', 'مشكلة في السعر أو الدفع'], ['behavior', 'sentiment_dissatisfied', 'سلوك سيء'],
+  ['route', 'alt_route', 'طريق طويل أو غلط'], ['vehicle', 'electric_rickshaw', 'حالة الركشة'],
+  ['no_show', 'person_off', 'ما حضر أو اتأخر كتير'], ['other', 'more_horiz', 'حاجة تانية']
+];
+const REPORT_ST = { new: ['yellow', 'جديد'], reviewing: ['grey', 'قيد المراجعة'], resolved: ['green', 'اتحل'], dismissed: ['red', 'مرفوض'] };
+function openReport({ tripId = null, reportedId = null, reportedName = '' } = {}) {
+  let cat = null, file = null;
+  modal(`<div class="row gap8">${icon('flag', 'f', 'color:var(--red)')}<h2 style="margin:0;font-size:20px">بلاغ${reportedName ? ' عن ' + esc(reportedName) : ''}</h2></div>
+    <div class="card row gap8" style="background:var(--red-soft);align-items:flex-start;padding:10px 12px">${icon('emergency', '', 'color:var(--red);font-size:20px')}
+      <span class="small" style="color:#7A271A;line-height:1.6">لو في خطر حالاً، اتصل بالشرطة على <a href="tel:999" style="color:#7A271A;font-weight:700">٩٩٩</a> أول.</span></div>
+    <b style="font-size:14px">نوع المشكلة</b>
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">${REPORT_CATS.map(([k, ic, l]) =>
+      `<button type="button" class="chip" data-cat="${k}" aria-pressed="false" style="height:auto;min-height:44px;padding:8px 10px;border-radius:14px;justify-content:flex-start;text-align:right">${icon(ic, '', 'font-size:18px')}${l}</button>`).join('')}</div>
+    <div class="field"><label for="rpD">التفاصيل</label>
+      <textarea class="input" id="rpD" rows="3" style="height:auto;padding:12px 16px;resize:none" placeholder="احكي لينا الحصل…"></textarea></div>
+    <label class="doc" id="rpImgL" style="padding:10px 14px"><span class="rk" style="width:40px;height:40px">${icon('add_a_photo')}</span><span class="col grow"><b style="font-size:14px">صورة (اختياري)</b><span class="small muted" id="rpImgT">إثبات أو صورة للمشكلة</span></span><input type="file" accept="image/*" id="rpImg"></label>
+    <button class="btn" id="rpSend" style="background:var(--red)">إرسال البلاغ</button>
+    <p class="small muted" style="margin:0;text-align:center">بلاغك سري — ${reportedName ? 'الطرف التاني ما بيعرف إنك بلّغت' : 'فريق ركشتي بس بيشوفه'}</p>`,
+  (o, close) => {
+    $$('[data-cat]', o).forEach(b => b.onclick = () => {
+      cat = b.dataset.cat;
+      $$('[data-cat]', o).forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+    });
+    $('#rpImg', o).onchange = (e) => { file = e.target.files[0]; if (file) { $('#rpImgT', o).textContent = 'اتختارت الصورة'; $('#rpImgL', o).classList.add('done'); } };
+    $('#rpSend', o).onclick = async (e) => {
+      const btn = e.currentTarget;
+      if (!cat) return toast('اختار نوع المشكلة', 'error');
+      const details = $('#rpD', o).value.trim();
+      if (cat === 'other' && details.length < 5) return toast('اكتب تفاصيل المشكلة', 'error');
+      btn.disabled = true;
+      const ok = await safe(async () => {
+        let image_path = null;
+        if (file) image_path = await uploadImage('reports', `${S.user.id}/${Date.now()}.jpg`, file);
+        const { error } = await sb.from('reports').insert({ trip_id: tripId, reporter_id: S.user.id, reported_id: reportedId, category: cat, details: details || null, image_path });
+        if (error) throw error; return true;
+      }, 'البلاغ وصل — بنراجعه ونتواصل معاك');
+      if (ok) close(); else btn.disabled = false;
+    };
+  });
+}
+
+Screens.myReports = () => ({
+  html: `<div class="screen" style="background:var(--bg)">
+    <div class="topbar"><button class="icon-btn" data-back aria-label="رجوع">${icon('arrow_forward')}</button><h1>بلاغاتي</h1>
+      <button class="icon-btn" id="newRp" aria-label="بلاغ جديد">${icon('add')}</button></div>
+    <div class="scroll pad col gap8" id="rpList"><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div></div>`,
+  async mount(root) {
+    bindBack(root);
+    $('#newRp').onclick = () => openReport();
+    const { data } = await sb.from('reports').select('*').eq('reporter_id', S.user.id).order('created_at', { ascending: false });
+    const list = data || [];
+    const box = $('#rpList'); if (!box) return;
+    if (!list.length) { box.innerHTML = `<div class="empty">${icon('flag')}<b>ما عندك بلاغات</b><span class="small">لو حصلت مشكلة في مشوار، بلّغ من شاشة المشوار أو من سجل مشاويرك</span></div>`; return; }
+    box.innerHTML = list.map(r => {
+      const c = REPORT_CATS.find(x => x[0] === r.category) || REPORT_CATS[7], st = REPORT_ST[r.status];
+      return `<div class="card col gap8"><div class="row gap8">${icon(c[1], '', 'color:var(--red)')}<b class="grow">${c[2]}</b><span class="pill ${st[0]}">${st[1]}</span></div>
+        ${r.details ? `<span class="small" style="line-height:1.6">${esc(r.details)}</span>` : ''}
+        <span class="small muted">${new Date(r.created_at).toLocaleString('ar-EG')}</span>
+        ${r.admin_note ? `<div class="card" style="background:var(--green-soft);padding:10px"><span class="small"><b>رد فريق ركشتي:</b> ${esc(r.admin_note)}</span></div>` : ''}</div>`;
+    }).join('');
+  }
+});
+
 /* ---------- Support chat (user ↔ admin) ---------- */
 Screens.support = ({ thread } = {}) => {
   const asAdmin = !!thread && thread !== S.user.id;
@@ -1533,9 +1616,9 @@ Screens.support = ({ thread } = {}) => {
 Screens.admin = ({ tab = 'support' } = {}) => ({
   html: `<div class="screen" style="background:var(--bg)">
     <div class="topbar"><button class="icon-btn" data-back aria-label="رجوع">${icon('arrow_forward')}</button><h1>لوحة الإدارة</h1></div>
-    <div style="padding:12px 16px 0"><div class="seg" role="tablist">
-      ${[['support', 'الدعم'], ['drivers', 'السواقين'], ['subs', 'الاشتراكات'], ['stats', 'الأرقام'], ['settings', 'الإعدادات']].map(([k, l]) => `<button role="tab" data-t="${k}" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${l}</button>`).join('')}
-    </div></div>
+    <div class="hscroll" role="tablist" style="padding-top:12px;padding-bottom:4px">
+      ${[['support', 'support_agent', 'الدعم'], ['reports', 'flag', 'البلاغات'], ['drivers', 'badge', 'السواقين'], ['subs', 'workspace_premium', 'الاشتراكات'], ['stats', 'monitoring', 'الأرقام'], ['settings', 'tune', 'الإعدادات']].map(([k, ic, l]) => `<button role="tab" data-t="${k}" class="chip ${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${icon(ic, '', 'font-size:18px')}${l}</button>`).join('')}
+    </div>
     <div class="scroll pad col gap8" id="adm"><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
   </div>`,
   async mount(root) {
@@ -1565,6 +1648,66 @@ Screens.admin = ({ tab = 'support' } = {}) => ({
       };
       await load();
       channel('adm-sup').on('postgres_changes', { event: '*', schema: 'public', table: 'support_threads' }, load).subscribe();
+    }
+
+
+    if (tab === 'reports') {
+      const load = async () => {
+        const { data } = await sb.from('reports').select('*').order('created_at', { ascending: false }).limit(100);
+        const list = (data || []).sort((a, b) => (['new', 'reviewing'].includes(b.status) - ['new', 'reviewing'].includes(a.status)));
+        if (!list.length) { box.innerHTML = `<div class="empty">${icon('flag')}<b>ما في بلاغات</b></div>`; return; }
+        const ids = [...new Set(list.flatMap(r => [r.reporter_id, r.reported_id]).filter(Boolean))];
+        const [{ data: ps }, { data: ds }, cnt] = await Promise.all([
+          sb.from('profiles').select('id,full_name,phone').in('id', ids),
+          sb.from('drivers').select('id,status').in('id', ids),
+          rpc('report_counts', { p_users: ids }).catch(() => [])
+        ]);
+        const pm = {}, dm = {}, cm = {};
+        (ps || []).forEach(p => pm[p.id] = p); (ds || []).forEach(d => dm[d.id] = d); (cnt || []).forEach(c => cm[c.user_id] = c);
+        const urls = {}; await Promise.all(list.filter(r => r.image_path).map(async r => { urls[r.id] = (await sb.storage.from('reports').createSignedUrl(r.image_path, 3600)).data?.signedUrl; }));
+        if (!$('#adm')) return;
+        box.innerHTML = list.map(r => {
+          const c = REPORT_CATS.find(x => x[0] === r.category) || REPORT_CATS[7], st = REPORT_ST[r.status];
+          const rep_ = pm[r.reporter_id] || {}, tgt = pm[r.reported_id], drv = dm[r.reported_id], n = cm[r.reported_id];
+          const open = ['new', 'reviewing'].includes(r.status);
+          return `<div class="card col gap8" style="${r.category === 'safety' || r.category === 'harassment' ? 'border:2px solid var(--red)' : ''}">
+            <div class="row gap8">${icon(c[1], '', 'color:var(--red)')}<b class="grow">${c[2]}</b><span class="pill ${st[0]}">${st[1]}</span></div>
+            <span class="small">من: <b>${esc(rep_.full_name || '')}</b> <a href="tel:${esc(rep_.phone || '')}" style="direction:ltr">${esc(rep_.phone || '')}</a></span>
+            ${tgt ? `<span class="small">ضد: <b>${esc(tgt.full_name || '')}</b> ${drv ? '(سواق)' : '(راكب)'} <a href="tel:${esc(tgt.phone || '')}" style="direction:ltr">${esc(tgt.phone || '')}</a>
+              ${n && n.total > 1 ? `<span class="pill red">${num(n.total)} بلاغات ضده</span>` : ''}</span>` : '<span class="small muted">بلاغ عام (بدون مشوار)</span>'}
+            ${r.details ? `<span style="font-size:14px;line-height:1.6;background:#F4F6F5;border-radius:12px;padding:10px">${esc(r.details)}</span>` : ''}
+            ${urls[r.id] ? `<a href="${urls[r.id]}"><img src="${urls[r.id]}" alt="مرفق" style="width:100%;max-height:220px;object-fit:contain;border-radius:12px;background:#F4F6F5"></a>` : ''}
+            <span class="small muted">${new Date(r.created_at).toLocaleString('ar-EG')}</span>
+            ${r.admin_note ? `<span class="small" style="color:var(--green-ink)"><b>ردك:</b> ${esc(r.admin_note)}</span>` : ''}
+            ${open ? `<div class="row gap8" style="flex-wrap:wrap">
+              ${r.status === 'new' ? `<button class="btn sm ghost" data-rs="${r.id}:reviewing" style="flex:1">قيد المراجعة</button>` : ''}
+              <button class="btn sm" data-rs="${r.id}:resolved" style="flex:1">${icon('check')}اتحل</button>
+              <button class="btn sm ghost" data-rs="${r.id}:dismissed" style="flex:1;color:var(--red)">رفض</button>
+              ${drv && drv.status === 'approved' ? `<button class="btn sm ghost" data-susp="${r.reported_id}" style="width:100%;color:var(--red)">${icon('block')}إيقاف السواق</button>` : ''}
+            </div>` : ''}</div>`;
+        }).join('');
+        $$('[data-rs]').forEach(b => b.onclick = () => {
+          const [id, st] = b.dataset.rs.split(':');
+          if (st === 'reviewing') return setSt(id, st, null);
+          modal(`<h2 style="margin:0;font-size:20px">${st === 'resolved' ? 'قفل البلاغ' : 'رفض البلاغ'}</h2>
+            <div class="field"><label for="an">رد للمبلّغ (اختياري — بيظهر ليه في «بلاغاتي»)</label><textarea class="input" id="an" rows="3" style="height:auto;padding:12px 16px"></textarea></div>
+            <button class="btn" id="anOk">حفظ</button>`, (o, close) => {
+            $('#anOk', o).onclick = async () => { await setSt(id, st, $('#an', o).value.trim() || null); close(); };
+          });
+        });
+        $$('[data-susp]').forEach(b => b.onclick = async () => {
+          if (!(await confirmBox('إيقاف السواق؟', 'ما بيقدر يستلم مشاوير لحدي ما ترجعه من تبويب السواقين.', 'إيقاف', true))) return;
+          const ok = await safe(async () => { const { error } = await sb.from('drivers').update({ status: 'suspended', is_online: false }).eq('id', b.dataset.susp); if (error) throw error; return true; }, 'السواق اتوقف');
+          if (ok) load();
+        });
+      };
+      const setSt = async (id, st, note) => {
+        const patch = { status: st }; if (note) patch.admin_note = note; if (st !== 'reviewing') patch.resolved_at = new Date().toISOString();
+        await safe(async () => { const { error } = await sb.from('reports').update(patch).eq('id', id); if (error) throw error; return true; }, 'اتحفظ');
+        load();
+      };
+      await load();
+      channel('adm-rp').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reports' }, () => { haptic(); toast('بلاغ جديد'); load(); }).subscribe();
     }
 
     if (tab === 'drivers') {
