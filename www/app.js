@@ -807,6 +807,7 @@ Screens.waiting = ({ id }) => ({
       const paintNote = () => { const left = Math.ceil((new Date(trip.preferred_until) - Date.now()) / 1000);
         note.innerHTML = `${icon('favorite', 'f', 'color:#E0245E')}<span class="small grow">${left > 0 ? `طلبك عند <b>${esc(fv?.nickname || 'سواقك المفضل')}</b> — لو ما رد خلال ${num(left)} ثانية بيتفتح لكل الركشات القريبة` : `${esc(fv?.nickname || 'سواقك المفضل')} ما رد، فطلبك اتفتح لكل الركشات القريبة`}</span>`; };
       paintNote(); $('#wRoute').after(note); every(1000, paintNote);
+      const h = $('.screen h2.h1'); if (h) h.textContent = `بنرسل طلبك لـ ${fv?.nickname || 'سواقك المفضل'}`;
     }
     const paintShares = async () => { if (!trip.is_shared) return; const sh = await loadShares(id); if ($('#wShares')) $('#wShares').innerHTML = sharesHtml(sh); };
     paintShares();
