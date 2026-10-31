@@ -853,6 +853,10 @@ Screens.chat = ({ id }) => {
       </form></div>`,
     async mount(root) {
       bindBack(root);
+      let ready, readyP = new Promise(r => ready = r), send = async () => {};
+      $('#cForm').onsubmit = async (e) => { e.preventDefault(); const v = $('#cIn').value.trim(); $('#cIn').value = ''; await readyP; send(v); };
+      $$('[data-q]').forEach(b => b.onclick = async () => { await readyP; send(b.dataset.q); });
+      $('#sendLoc').onclick = async () => { const p = await getPos(); await readyP; send('ده موقعي، تعال عليه مباشرة', p); };
       trip = await safe(() => getTrip(id));
       if (!trip) return back();
       const otherId = trip.rider_id === S.user.id ? trip.driver_id : trip.rider_id;
@@ -888,16 +892,14 @@ Screens.chat = ({ id }) => {
           if (el && mine(p.new) && p.new.read_at) { const t = $('.t .ms', el); if (t) { t.textContent = 'done_all'; t.style.color = 'var(--yellow)'; } }
         }
       }).subscribe();
-      const send = async (body, loc) => {
+      send = async (body, loc) => {
         if (!body && !loc) return;
         const row = { trip_id: id, sender_id: S.user.id, body: body || null, location: loc ? pointWKT(loc[0], loc[1]) : null };
         const { data: m, error } = await sb.from('messages').insert(row).select().single();
         if (error) return toast(errMsg(error), 'error');
         if (!$(`[data-id="${m.id}"]`, box)) { renderMsg(m); scrollEnd(); }
       };
-      $('#cForm').onsubmit = (e) => { e.preventDefault(); const v = $('#cIn').value.trim(); $('#cIn').value = ''; send(v); };
-      $$('[data-q]').forEach(b => b.onclick = () => send(b.dataset.q));
-      $('#sendLoc').onclick = async () => { const p = await getPos(); send('ده موقعي، تعال عليه مباشرة', p); };
+      ready();
     }
   };
 };
@@ -1461,6 +1463,8 @@ Screens.support = ({ thread } = {}) => {
     async mount(root) {
       bindBack(root);
       const box = $('#sMsgs');
+      let ready, readyP = new Promise(r => ready = r), send = async () => {};
+      $('#sForm').onsubmit = async (e) => { e.preventDefault(); const v = $('#sIn').value.trim(); $('#sIn').value = ''; await readyP; send(v); };
       if (!asAdmin) await sb.from('support_threads').upsert({ user_id: tid }, { onConflict: 'user_id', ignoreDuplicates: true });
       else {
         const p = await getProfile(tid);
@@ -1492,14 +1496,14 @@ Screens.support = ({ thread } = {}) => {
         await render(p.new);
         if (!mine(p.new)) { haptic(); rpc('support_mark_read', { p_thread: tid }).catch(() => {}); }
       }).subscribe();
-      const send = async (body, image_path) => {
+      send = async (body, image_path) => {
         if (!body && !image_path) return;
         const { data: m, error } = await sb.from('support_messages').insert({ thread_id: tid, sender_id: S.user.id, from_admin: asAdmin, body: body || null, image_path: image_path || null }).select().single();
         if (error) return toast(errMsg(error), 'error');
         render(m);
         const tp = $('#sTopics'); if (tp) tp.remove();
       };
-      $('#sForm').onsubmit = (e) => { e.preventDefault(); const v = $('#sIn').value.trim(); $('#sIn').value = ''; send(v); };
+      ready();
       $$('[data-tp]').forEach(b => b.onclick = () => { const i = $('#sIn'); i.value = b.dataset.tp + ': '; i.focus(); });
       $('#sImg').onchange = async (e) => {
         const f = e.target.files[0]; if (!f) return;
@@ -1695,6 +1699,8 @@ sb.auth.onAuthStateChange((ev) => {
   if (ev === 'SIGNED_OUT') { S.user = null; Loc.stop(); }
 });
 
+// كل النماذج بتتعالج بالجافاسكربت — ما نخلي أي نموذج يعيد تحميل التطبيق
+document.addEventListener('submit', (e) => e.preventDefault(), true);
 go('splash');
 setupNative();
 boot().catch((e) => { console.error(e); toast(errMsg(e), 'error'); go('auth', {}, { root: true }); });
