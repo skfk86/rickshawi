@@ -207,7 +207,12 @@ async function reverse(lat, lng) {
     const u = `https://nominatim.openstreetmap.org/reverse?format=json&zoom=17&accept-language=ar&lat=${lat}&lon=${lng}`;
     const j = await (await fetch(u)).json();
     const a = j.address || {};
-    return [a.road, a.neighbourhood || a.suburb || a.quarter, a.city || a.town].filter(Boolean).slice(0, 2).join('، ') || 'موقع على الخريطة';
+    const place = a.amenity || a.shop || a.building || a.road || a.pedestrian || a.footway;
+    const area = a.neighbourhood || a.quarter || a.residential || a.suburb || a.city_district || a.hamlet || a.village;
+    let out = [place, area].filter(Boolean);
+    if (out.length < 2 && j.display_name) out = out.concat(j.display_name.split(/[،,]/).map(x => x.trim()).filter(x => x && !out.includes(x) && !/^\d+$/.test(x)).slice(0, 2 - out.length));
+    if (!out.length) out = [a.city || a.town || 'موقع على الخريطة'];
+    return out.join('، ');
   } catch (_) { return 'موقع على الخريطة'; }
 }
 
@@ -1511,7 +1516,7 @@ Screens.driverTrip = ({ id }) => {
         $('#sheet').innerHTML = `<div class="grab"></div>
           <div class="row gap12"><div class="avatar grey" style="width:54px;height:54px;border-radius:16px">${rider.avatar_url ? `<img src="${esc(rider.avatar_url)}" alt="">` : initial(rider.full_name)}</div>
             <div class="col grow gap4"><b style="font-size:17px">${esc(rider.full_name || 'الراكب')}</b><span class="small muted row gap4">${icon('star', 'f', 'font-size:14px;color:var(--star)')}${num(rider.rating_avg || 5)}</span></div>
-            <b class="price" style="font-size:22px">${money(trip.final_price)}</b></div>
+            <b class="price" style="font-size:22px">${trip.is_shared && shares[0] ? money(shares[0].total) : money(trip.final_price)}</b></div>
           <div class="route-box"><div class="route-dots"><span class="dot-a"></span><span class="dash"></span><span class="dot-b"></span></div>
             <div class="col grow gap8"><span style="font-size:14px;${trip.status === 'in_progress' ? 'color:var(--ink3)' : 'font-weight:600'}">${esc(trip.pickup_address || '')}</span>
             <span style="font-size:14px;${trip.status === 'in_progress' ? 'font-weight:600' : 'color:var(--ink3)'}">${esc(trip.dropoff_address || '')}</span></div></div>
