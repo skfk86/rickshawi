@@ -557,18 +557,21 @@ Screens.riderHome = () => {
           meMk.on('dragend', () => { const ll = meMk.getLatLng(); setPickup([ll.lat, ll.lng]); if (dest) setDest(dest); });
         } else meMk.setLatLng(p);
         pickupAddr = await reverse(p[0], p[1]);
+        if (map._dead) return;
         $('#pickAddr') && ($('#pickAddr').textContent = pickupAddr);
         $('#pickAddr2') && ($('#pickAddr2').textContent = pickupAddr);
       };
       const p = await getPos();
+      if (map._dead) return;
       map.setView(p, 17);
       setPickup(p);
       if (lastAcc && lastAcc > 40) toast('دقة الموقع ضعيفة — اسحب النقطة الزرقاء لمكانك بالضبط');
-      $('#recenter').onclick = async () => { const q = await getPos(); map.setView(q, 16); setPickup(q); };
+      $('#recenter').onclick = async () => { const q = await getPos(); if (map._dead) return; map.setView(q, 16); setPickup(q); };
 
       const loadDrivers = async () => {
         if (!pickup) return;
         const { data } = await sb.rpc('nearby_drivers', { lat: pickup[0], lng: pickup[1], radius_m: C.SEARCH_RADIUS_M, max_results: 10 });
+        if (map._dead) return;
         drivers = data || [];
         driverLayer.clearLayers();
         drivers.forEach(d => L.marker([d.lat, d.lng], { icon: rkIcon(`${num(etaMin(d.distance_m))} د`) }).addTo(driverLayer));
@@ -595,6 +598,7 @@ Screens.riderHome = () => {
       map.on('click', async (e) => {
         if (!pickup) return;
         const name = await reverse(e.latlng.lat, e.latlng.lng);
+        if (map._dead) return;
         setDest({ name, lat: e.latlng.lat, lng: e.latlng.lng });
       });
       let deb;
@@ -746,6 +750,7 @@ Screens.tracking = ({ id }) => {
       if (trip.status === 'completed') return go('rating', { id }, { root: true });
       if (trip.status === 'cancelled') { toast('المشوار اتلغى'); return home(); }
       drv = await getDriverPublic(trip.driver_id);
+      if (!$('#stTxt')) return;
       map = makeMap($('#map'), trip._pickup, 15);
       onLeave(() => { map._dead = true; map.remove(); });
       L.marker(trip._pickup, { icon: meIcon() }).addTo(map);
@@ -1168,7 +1173,7 @@ Screens.driverHome = () => {
       map = makeMap($('#map'), lastPos || C.DEFAULT_CENTER, 15);
       reqLayer.addTo(map);
       onLeave(() => { map._dead = true; map.remove(); });
-      const p = await getPos(); map.setView(p, 15);
+      const p = await getPos(); if (map._dead) return; map.setView(p, 15);
       meMk = L.marker(p, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map);
       sb.rpc('update_my_location', { lat: p[0], lng: p[1] }).then(() => {});
 
@@ -1285,11 +1290,12 @@ Screens.driverTrip = ({ id }) => {
       if (trip.status === 'cancelled') { toast('المشوار اتلغى'); return home(); }
       rider = await getProfile(trip.rider_id);
       Loc.start(); // الراكب يتابعك
+      if (!$('#stTxt')) return;
       map = makeMap($('#map'), trip._pickup, 15);
       onLeave(() => { map._dead = true; map.remove(); });
       L.marker(trip._pickup, { icon: meIcon() }).addTo(map);
       L.marker(trip._dropoff, { icon: destIcon() }).addTo(map);
-      const p = await getPos(); meMk = L.marker(p, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map);
+      const p = await getPos(); if (map._dead) return; meMk = L.marker(p, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map);
       const rf = routeFollower(map);
       let follow = true;
       map.on('dragstart', () => { follow = false; });
@@ -1302,6 +1308,7 @@ Screens.driverTrip = ({ id }) => {
         if (follow && !map._dead) map.panTo(lastPos, { animate: true });
       };
       const first = await rf.update(p, trip.status === 'in_progress' ? trip._dropoff : trip._pickup);
+      if (map._dead) return;
       map.fitBounds(L.polyline(first.coords).getBounds().pad(0.3), { paddingBottomRight: [0, 340] });
       every(5000, refreshRoute);
       const onMeter = (e) => { if ($('#mKm')) { $('#mKm').textContent = num(e.detail.toFixed(2)); $('#mFare').textContent = money(fareFor(e.detail)); } };
