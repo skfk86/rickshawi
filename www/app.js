@@ -1003,7 +1003,7 @@ Screens.account = () => ({
     ${driverCard()}
     ${S.profile?.role === 'admin' ? `<button class="list-btn" id="adminBtn" style="background:var(--yellow-soft)">${icon('admin_panel_settings')}<span class="grow"><b>لوحة الإدارة</b><br><span class="small muted">قبول السواقين، الاشتراكات، الأسعار</span></span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>` : ''}
     <div class="col gap8">
-      <a class="list-btn" href="tel:${esc(C.SUPPORT_PHONE)}" style="text-decoration:none">${icon('support_agent')}<span class="grow">الدعم والمساعدة</span>${icon('chevron_left', '', 'color:var(--ink3)')}</a>
+      <button class="list-btn" id="supportBtn">${icon('support_agent')}<span class="grow col"><span>الدعم والمساعدة</span><span class="small muted">دردش مع فريق ركشتي</span></span><span id="supBadge"></span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>
       <button class="list-btn" id="logout" style="color:var(--red)">${icon('logout')}<span class="grow">تسجيل خروج</span></button>
     </div>
     <p class="small muted" style="text-align:center">ركشتي · الإصدار ١٫٠</p>
@@ -1038,6 +1038,10 @@ Screens.account = () => ({
     });
     const bd = $('#becomeDriver'); bd && (bd.onclick = () => go('driverSignup'));
     const ad = $('#adminBtn'); ad && (ad.onclick = () => go('admin'));
+    $('#supportBtn').onclick = () => go('support');
+    sb.from('support_threads').select('unread_user').eq('user_id', S.user.id).maybeSingle().then(({ data }) => {
+      if (data && data.unread_user && $('#supBadge')) $('#supBadge').innerHTML = `<span class="pill yellow" style="background:var(--yellow);color:var(--ink)">${num(data.unread_user)}</span>`;
+    });
   }
 });
 function driverCard() {
@@ -1421,12 +1425,89 @@ async function renderSub() {
 }
 
 
+
+/* ---------- Support chat (user ↔ admin) ---------- */
+Screens.support = ({ thread } = {}) => {
+  const asAdmin = !!thread && thread !== S.user.id;
+  const tid = thread || S.user.id;
+  const TOPICS = ['مشكلة في مشوار', 'مشكلة في الدفع', 'تسجيل السواق', 'اقتراح', 'بلاغ عن سواق أو راكب'];
+  return {
+    html: `<div class="screen" style="background:var(--bg)">
+      <div class="topbar">
+        <button class="icon-btn" data-back aria-label="رجوع">${icon('arrow_forward')}</button>
+        <div class="avatar" style="width:42px;height:42px;background:${asAdmin ? '#E3E8E5' : 'var(--ink)'}">${asAdmin ? '؟' : icon('support_agent', '', 'color:var(--yellow)')}</div>
+        <div class="col grow"><b id="sTitle" style="font-size:16px">${asAdmin ? '…' : 'دعم ركشتي'}</b><span class="small muted" id="sSub">${asAdmin ? '' : 'بنرد عليك في أقرب وقت'}</span></div>
+        ${asAdmin ? `<a class="icon-btn" id="sCall" aria-label="اتصال">${icon('call')}</a><button class="icon-btn" id="sClose" aria-label="قفل المحادثة">${icon('task_alt')}</button>` : ''}
+      </div>
+      <div class="scroll pad col gap8" id="sMsgs">
+        ${asAdmin ? '' : `<div class="card col gap8" style="align-self:center;text-align:center;max-width:90%"><span class="rk y" style="align-self:center">${icon('waving_hand')}</span><b>أهلاً ${esc((S.profile?.full_name || '').split(' ')[0])}!</b><span class="small muted" style="line-height:1.6">اكتب مشكلتك أو سؤالك، وفريق ركشتي بيرد عليك هنا. ممكن ترسل صورة كمان.</span></div>`}
+      </div>
+      ${asAdmin ? '' : `<div class="hscroll" id="sTopics">${TOPICS.map(t => `<button class="chip" data-tp="${esc(t)}">${esc(t)}</button>`).join('')}</div>`}
+      <form class="composer" id="sForm">
+        <label class="round" aria-label="إرسال صورة" style="cursor:pointer">${icon('image')}<input type="file" accept="image/*" id="sImg" class="sr"></label>
+        <label for="sIn" class="sr">اكتب رسالة</label>
+        <input id="sIn" placeholder="اكتب رسالتك…" autocomplete="off" enterkeyhint="send">
+        <button class="round y" aria-label="إرسال">${icon('send', 'f', 'transform:scaleX(-1)')}</button>
+      </form></div>`,
+    async mount(root) {
+      bindBack(root);
+      const box = $('#sMsgs');
+      if (!asAdmin) await sb.from('support_threads').upsert({ user_id: tid }, { onConflict: 'user_id', ignoreDuplicates: true });
+      else {
+        const p = await getProfile(tid);
+        $('#sTitle').textContent = p.full_name || 'مستخدم';
+        $('#sSub').textContent = p.phone || '';
+        $('#sCall').href = 'tel:' + (p.phone || '');
+        $('#sClose').onclick = async () => { await safe(() => rpc('support_set_status', { p_thread: tid, p_status: 'closed' }), 'المحادثة اتقفلت'); back(); };
+      }
+      const mine = (m) => asAdmin ? m.from_admin : !m.from_admin;
+      const urlCache = {};
+      const render = async (m) => {
+        if ($(`[data-id="${m.id}"]`, box)) return;
+        const d = document.createElement('div');
+        d.className = 'bubble ' + (mine(m) ? 'me' : 'them'); d.dataset.id = m.id;
+        let img = '';
+        if (m.image_path) {
+          urlCache[m.image_path] = urlCache[m.image_path] || (await sb.storage.from('support').createSignedUrl(m.image_path, 3600)).data?.signedUrl;
+          img = `<a href="${urlCache[m.image_path]}"><img src="${urlCache[m.image_path]}" alt="صورة" style="max-width:220px;border-radius:12px;display:block"></a>`;
+        }
+        const who = !mine(m) && !asAdmin ? `<span class="small" style="font-weight:600;color:var(--green-ink)">فريق ركشتي</span>` : '';
+        d.innerHTML = `${who}${img}${m.body ? `<span>${esc(m.body)}</span>` : ''}<span class="t">${timeStr(m.created_at)}</span>`;
+        box.appendChild(d);
+        box.scrollTop = box.scrollHeight;
+      };
+      const { data } = await sb.from('support_messages').select('*').eq('thread_id', tid).order('created_at');
+      for (const m of data || []) await render(m);
+      rpc('support_mark_read', { p_thread: tid }).catch(() => {});
+      channel('sup').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_messages', filter: `thread_id=eq.${tid}` }, async (p) => {
+        await render(p.new);
+        if (!mine(p.new)) { haptic(); rpc('support_mark_read', { p_thread: tid }).catch(() => {}); }
+      }).subscribe();
+      const send = async (body, image_path) => {
+        if (!body && !image_path) return;
+        const { data: m, error } = await sb.from('support_messages').insert({ thread_id: tid, sender_id: S.user.id, from_admin: asAdmin, body: body || null, image_path: image_path || null }).select().single();
+        if (error) return toast(errMsg(error), 'error');
+        render(m);
+        const tp = $('#sTopics'); if (tp) tp.remove();
+      };
+      $('#sForm').onsubmit = (e) => { e.preventDefault(); const v = $('#sIn').value.trim(); $('#sIn').value = ''; send(v); };
+      $$('[data-tp]').forEach(b => b.onclick = () => { const i = $('#sIn'); i.value = b.dataset.tp + ': '; i.focus(); });
+      $('#sImg').onchange = async (e) => {
+        const f = e.target.files[0]; if (!f) return;
+        toast('بنرسل الصورة…');
+        const path = await safe(() => uploadImage('support', `${tid}/${Date.now()}.jpg`, f));
+        if (path) send(null, path);
+      };
+    }
+  };
+};
+
 /* ---------- Admin ---------- */
-Screens.admin = ({ tab = 'drivers' } = {}) => ({
+Screens.admin = ({ tab = 'support' } = {}) => ({
   html: `<div class="screen" style="background:var(--bg)">
     <div class="topbar"><button class="icon-btn" data-back aria-label="رجوع">${icon('arrow_forward')}</button><h1>لوحة الإدارة</h1></div>
     <div style="padding:12px 16px 0"><div class="seg" role="tablist">
-      ${[['drivers', 'السواقين'], ['subs', 'الاشتراكات'], ['stats', 'الإحصائيات'], ['settings', 'الإعدادات']].map(([k, l]) => `<button role="tab" data-t="${k}" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${l}</button>`).join('')}
+      ${[['support', 'الدعم'], ['drivers', 'السواقين'], ['subs', 'الاشتراكات'], ['stats', 'الأرقام'], ['settings', 'الإعدادات']].map(([k, l]) => `<button role="tab" data-t="${k}" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${l}</button>`).join('')}
     </div></div>
     <div class="scroll pad col gap8" id="adm"><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
   </div>`,
@@ -1436,6 +1517,28 @@ Screens.admin = ({ tab = 'drivers' } = {}) => ({
     const box = $('#adm');
     const signed = async (bucket, path) => (await sb.storage.from(bucket).createSignedUrl(path, 3600)).data?.signedUrl;
     const DOCN = { photo: 'الصورة', license: 'الرخصة', vehicle_registration: 'شهادة البحث', vehicle_photo: 'الركشة' };
+
+    if (tab === 'support') {
+      const load = async () => {
+        const { data: th } = await sb.from('support_threads').select('*').order('last_at', { ascending: false }).limit(100);
+        const list = th || [];
+        if (!list.length) { box.innerHTML = `<div class="empty">${icon('support_agent')}<b>ما في محادثات دعم</b></div>`; return; }
+        const { data: ps } = await sb.from('profiles').select('id,full_name,phone').in('id', list.map(t => t.user_id));
+        const pm = {}; (ps || []).forEach(p => pm[p.id] = p);
+        box.innerHTML = list.map(t => {
+          const p = pm[t.user_id] || {};
+          return `<button class="list-btn" data-th="${t.user_id}" style="align-items:flex-start">
+            <span class="avatar grey" style="width:44px;height:44px">${initial(p.full_name)}</span>
+            <span class="col grow gap4" style="min-width:0"><span class="row" style="justify-content:space-between"><b>${esc(p.full_name || 'مستخدم')}</b><span class="small muted">${t.last_at ? timeStr(t.last_at) : ''}</span></span>
+              <span class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.last_message || '')}</span></span>
+            ${t.unread_admin ? `<span class="badge" style="position:static">${num(t.unread_admin)}</span>` : t.status === 'closed' ? '<span class="pill grey">مقفولة</span>' : ''}
+          </button>`;
+        }).join('');
+        $$('[data-th]').forEach(b => b.onclick = () => go('support', { thread: b.dataset.th }));
+      };
+      await load();
+      channel('adm-sup').on('postgres_changes', { event: '*', schema: 'public', table: 'support_threads' }, load).subscribe();
+    }
 
     if (tab === 'drivers') {
       const { data: ds } = await sb.from('drivers').select('*').order('created_at', { ascending: false });
@@ -1571,7 +1674,7 @@ function setupNative() {
   });
   P.App && P.App.addListener('appStateChange', ({ isActive }) => {
     // نحدّث بس الشاشات اللحظية؛ شاشات النماذج ما نلمسها (فتح الكاميرا/المعرض بيخلي التطبيق في الخلفية)
-    const LIVE = ['waiting', 'tracking', 'driverTrip', 'driverHome', 'chat'];
+    const LIVE = ['waiting', 'tracking', 'driverTrip', 'driverHome', 'chat', 'support'];
     if (isActive && S.user && S.current && LIVE.includes(S.current.screen) && !$('.overlay')) {
       const c = S.current; go(c.screen, c.params, { replace: true });
     }

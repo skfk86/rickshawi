@@ -1,0 +1,2 @@
+-- نظام دردشة الدعم (مطبّق على قاعدة البيانات) — الجداول: support_threads, support_messages
+-- الدوال: on_support_message (trigger), support_mark_read, support_set_status — والتخزين: bucket "support"
