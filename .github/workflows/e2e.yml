@@ -1,0 +1,33 @@
+name: E2E Test
+
+on:
+  workflow_dispatch:
+  push:
+    paths: ['tests/**']
+
+permissions:
+  contents: write
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+      - run: npm install && npm install --no-save playwright@1.48.2 http-server
+      - run: npm run libs
+      - run: npx playwright install --with-deps chromium
+      - name: Serve app
+        run: (npx http-server www -p 8080 -c-1 -s &) && sleep 3
+      - name: Run E2E
+        env:
+          E2E_PASSWORD: Tccf85fcc14ed12b8x   # حسابات تجريبية بتتمسح بعد الاختبار
+        run: node tests/e2e.js
+      - name: Publish screenshots to e2e-results branch
+        if: always()
+        run: |
+          mkdir -p /tmp/out && cp -r shots/* /tmp/out/ || true
+          git config user.name "e2e-bot" && git config user.email "e2e@users.noreply.github.com"
+          git checkout --orphan e2e-results && git rm -rfq . && rm -rf node_modules www/lib
+          cp -r /tmp/out/* . && git add -A && git commit -qm "E2E ${{ github.run_number }}" && git push -f origin e2e-results
