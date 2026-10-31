@@ -1174,7 +1174,7 @@ Screens.history = ({ filter = 'all' } = {}) => ({
           ${t.driver_id ? `<button class="chip" data-rp="${t.id}" style="height:32px;font-size:12px">${icon('flag', '', 'font-size:14px')}إبلاغ</button>` : ''}</div></div>`;
     }).join('');
     $$('[data-rp]').forEach(b => b.onclick = () => {
-      const t = tmap[b.dataset.rp], other = S.user.id === t.rider_id ? t.driver_id : t.rider_id;
+      const t = tmap[b.dataset.rp], other = S.user.id === t.driver_id ? t.rider_id : t.driver_id;
       openReport({ tripId: t.id, reportedId: other });
     });
   }
