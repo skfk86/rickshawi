@@ -1123,11 +1123,10 @@ Screens.rating = ({ id }) => {
       $('#rName').textContent = (o.full_name || '') + '؟';
       if (iAmRider) {
         const host = $('#rName').closest('.row');
-        const paintFav = async () => {
+        const paintFav = () => {
           const old = $('[data-fav]', host); old && old.remove();
           host.insertAdjacentHTML('beforeend', favBtnHtml(otherId, true));
-          const dp = await getDriverPublic(otherId);
-          bindFavButtons(host, () => dp, paintFav);
+          bindFavButtons(host, () => null, paintFav);
         };
         paintFav();
       }
@@ -1777,8 +1776,9 @@ function openFavEditor({ driverId, realName = '', plate = '', onDone } = {}) {
   });
 }
 function bindFavButtons(root, info, rerender) {
-  $$('[data-fav]', root).forEach(b => b.onclick = () => {
-    const d = info(b.dataset.fav) || {};
+  $$('[data-fav]', root).forEach(b => b.onclick = async () => {
+    let d = info(b.dataset.fav);
+    if (!d || !d.full_name) d = await getDriverPublic(b.dataset.fav);
     openFavEditor({ driverId: b.dataset.fav, realName: d.full_name, plate: d.plate_number, onDone: rerender });
   });
 }
