@@ -307,6 +307,7 @@ async function loadMe() {
     sb.from('app_settings').select('*').eq('id', 1).maybeSingle()
   ]);
   S.profile = p.data; S.driver = d.data; S.settings = st.data;
+  loadFavIds().catch(() => {});
   const saved = await storage.getItem('rk_mode');
   S.mode = (saved === 'driver' && S.driver) ? 'driver' : 'rider';
 }
@@ -576,8 +577,8 @@ Screens.auth = ({ tab = 'login' } = {}) => ({
 });
 
 /* ---------- Rider: Home ---------- */
-Screens.riderHome = () => {
-  let map, meMk, destMk, drivers = [], dest = null, pickup = null, pickupAddr = '', price = 0, km = 0;
+Screens.riderHome = ({ preferred = null } = {}) => {
+  let map, meMk, destMk, drivers = [], dest = null, pickup = null, pickupAddr = '', price = 0, km = 0, favOnline = [];
   const driverLayer = L.layerGroup();
   return {
     html: `<div class="screen">
@@ -633,6 +634,11 @@ Screens.riderHome = () => {
         const { data } = await sb.rpc('nearby_drivers', { lat: pickup[0], lng: pickup[1], radius_m: C.SEARCH_RADIUS_M, max_results: 10 });
         if (map._dead) return;
         drivers = data || [];
+        if (S.favs && S.favs.size) {
+          const { data: fv } = await sb.rpc('my_favorite_drivers', { lat: pickup[0], lng: pickup[1] });
+          if (map._dead) return;
+          favOnline = (fv || []).filter(x => x.is_available && (x.distance_m == null || x.distance_m < 8000));
+        }
         driverLayer.clearLayers();
         drivers.forEach(d => L.marker([d.lat, d.lng], { icon: rkIcon(`${num(etaMin(d.distance_m))} د`) }).addTo(driverLayer));
         renderBottom();
@@ -689,7 +695,16 @@ Screens.riderHome = () => {
             <span class="col grow gap4"><b style="font-size:15px">${esc(d.full_name || 'سواق')}</b>
               <span class="small muted row gap4">${icon('star', 'f', 'font-size:14px;color:var(--star)')}${num(d.rating_avg || 5)} · ${num(etaMin(d.distance_m))} د · ${distStr(d.distance_m)}</span></span>
             ${d.plate_number ? `<span class="plate"><span>السودان</span><span>${esc(d.plate_number)}</span></span>` : ''}</div>`).join('');
-        if (!dest) { b.innerHTML = near + (list ? `<div class="col gap8">${list}</div><p class="small muted" style="margin:0;text-align:center">اكتب وجهتك عشان تشوف السعر وتطلب</p>` : ''); return; }
+        const prefBanner = preferred ? `<div class="card row gap8" style="background:var(--red-soft);border:1px solid #F7C6D4;padding:10px 12px">${icon('favorite', 'f', 'color:#E0245E')}
+            <span class="col grow"><b style="font-size:14px">بتطلب من ${esc(preferred.name)}</b><span class="small muted">الطلب بيوصله هو أول دقيقة ونص</span></span>
+            <button class="icon-btn" id="clearPref" aria-label="إلغاء" style="width:36px;height:36px;background:#fff">${icon('close', '', 'font-size:18px')}</button></div>` : '';
+        const favStrip = !preferred && favOnline.length ? `<div class="col gap8"><span class="small row gap4" style="font-weight:600">${icon('favorite', 'f', 'font-size:16px;color:#E0245E')}سواقينك المتاحين</span>
+            <div class="hscroll" style="padding:0">${favOnline.map(f => `<button class="chip" data-pref="${f.driver_id}" style="height:44px">${initial(f.nickname)} ${esc(f.nickname)}${f.distance_m != null ? ` · ${num(etaMin(f.distance_m))} د` : ''}</button>`).join('')}</div></div>` : '';
+        const bindPref = () => {
+          $('#clearPref') && ($('#clearPref').onclick = () => { preferred = null; renderBottom(); });
+          $$('[data-pref]').forEach(x => x.onclick = () => { const f = favOnline.find(y => y.driver_id === x.dataset.pref); preferred = { id: f.driver_id, name: f.nickname }; haptic(); renderBottom(); });
+        };
+        if (!dest) { b.innerHTML = prefBanner + favStrip + (preferred ? '' : near) + (!preferred && list ? `<div class="col gap8">${list}</div>` : '') + `<p class="small muted" style="margin:0;text-align:center">اكتب وجهتك عشان تشوف السعر وتطلب</p>`; bindPref(); return; }
         const joinCards = openShared.map((o, i) => {
           const used = cap() - o.seats_left, est = Math.round(o.price * (1 + pct() * o.groups) / (used + 1) / 100) * 100;
           return `<div class="card col gap8" style="border:2px solid var(--yellow);padding:12px">
@@ -702,8 +717,8 @@ Screens.riderHome = () => {
         const avail = drivers.length
           ? `<span class="pill green">${icon('electric_rickshaw', 'f', 'font-size:14px')}${num(drivers.length)} متاحة · ${num(etaMin(drivers[0].distance_m))} د</span>`
           : `<span class="pill yellow">${icon('schedule', '', 'font-size:14px')}ما في ركشة قريبة هسع</span>`;
-        b.innerHTML = `
-          ${joinCards ? `<div class="col gap8"><b style="font-size:15px">طرحات ماشية لنفس الاتجاه</b>${joinCards}</div>` : ''}
+        b.innerHTML = `${prefBanner}
+          ${joinCards && !preferred ? `<div class="col gap8"><b style="font-size:15px">طرحات ماشية لنفس الاتجاه</b>${joinCards}</div>` : ''}
           <div class="card col gap12" style="background:#F4F6F5;padding:14px">
             <div class="row" style="justify-content:space-between"><span class="small muted row gap4">${icon('route', '', 'font-size:16px')}${num(km.toFixed(1))} كم · ${num(routeMin)} د</span>${avail}</div>
             <div class="row" style="justify-content:space-between">
@@ -720,8 +735,9 @@ Screens.riderHome = () => {
           </div>
           <div class="row gap8">
             <span class="btn ghost" style="width:96px;font-size:14px">${icon('payments', '', 'color:var(--green)')}كاش</span>
-            <button class="btn" id="reqBtn" style="justify-content:space-between"><span>${shared ? 'اطلب طرحة' : 'اطلب ركشة'}</span><span class="row gap4" style="color:var(--yellow)">${money(price)}${icon('arrow_back')}</span></button>
+            <button class="btn" id="reqBtn" style="justify-content:space-between"><span>${preferred ? 'اطلب ' + esc(preferred.name) : shared ? 'اطلب طرحة' : 'اطلب ركشة'}</span><span class="row gap4" style="color:var(--yellow)">${money(price)}${icon('arrow_back')}</span></button>
           </div>`;
+        bindPref();
         const step = Math.max(100, Math.round(suggestPrice(km) * 0.05 / 100) * 100);
         $('#shareTg').onchange = (e) => { shared = e.target.checked; renderBottom(); };
         $('#sMinus') && ($('#sMinus').onclick = () => { seats = Math.max(1, seats - 1); renderBottom(); });
@@ -740,6 +756,7 @@ Screens.riderHome = () => {
             const { data, error } = await sb.from('trips').insert({
               rider_id: S.user.id, pickup: pointWKT(pickup[0], pickup[1]), pickup_address: pickupAddr,
               dropoff: pointWKT(dest.lat, dest.lng), dropoff_address: dest.name,
+              preferred_driver_id: preferred ? preferred.id : null,
               distance_km: +km.toFixed(2), offered_price: price
             }).select().single();
             if (error) throw error;
@@ -783,6 +800,14 @@ Screens.waiting = ({ id }) => ({
       <div class="col grow gap8"><span class="small muted">${esc(trip.pickup_address || '')}</span><b style="font-size:15px">${esc(trip.dropoff_address || '')}</b></div>
       <div class="col" style="align-items:flex-start;justify-content:center"><span class="small muted">${num((+trip.distance_km || 0).toFixed(1))} كم</span><b>${money(trip.offered_price)}</b></div>`;
     $('#tripInfo').textContent = `${trip.dropoff_address || 'وجهتك'} · ${owner ? 'عرضك ' + money(trip.offered_price) : 'طرحة'}`;
+    if (owner && trip.preferred_driver_id && trip.preferred_until) {
+      const fv = (await sb.from('favorite_drivers').select('nickname').eq('driver_id', trip.preferred_driver_id).maybeSingle()).data;
+      const note = document.createElement('div');
+      note.className = 'card row gap8'; note.style.cssText = 'background:var(--red-soft);text-align:right';
+      const paintNote = () => { const left = Math.ceil((new Date(trip.preferred_until) - Date.now()) / 1000);
+        note.innerHTML = `${icon('favorite', 'f', 'color:#E0245E')}<span class="small grow">${left > 0 ? `طلبك عند <b>${esc(fv?.nickname || 'سواقك المفضل')}</b> — لو ما رد خلال ${num(left)} ثانية بيتفتح لكل الركشات القريبة` : `${esc(fv?.nickname || 'سواقك المفضل')} ما رد، فطلبك اتفتح لكل الركشات القريبة`}</span>`; };
+      paintNote(); $('#wRoute').after(note); every(1000, paintNote);
+    }
     const paintShares = async () => { if (!trip.is_shared) return; const sh = await loadShares(id); if ($('#wShares')) $('#wShares').innerHTML = sharesHtml(sh); };
     paintShares();
     if (trip.is_shared) channel('wsh').on('postgres_changes', { event: '*', schema: 'public', table: 'trip_passengers', filter: `trip_id=eq.${id}` }, () => { haptic(); paintShares(); }).subscribe();
@@ -927,6 +952,7 @@ Screens.tracking = ({ id }) => {
               <span style="position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;border-radius:999px;padding:1px 6px;font-size:11px;display:flex;align-items:center;gap:2px">${icon('star', 'f', 'font-size:12px;color:var(--yellow)')}${num(drv.rating_avg || 5)}</span></div>
             <div class="col grow gap4"><b style="font-size:17px">${esc(drv.full_name || 'السواق')}</b><span class="small muted">${esc(drv.vehicle_color ? 'ركشة ' + drv.vehicle_color : 'ركشة')} · ${num(drv.rating_count || 0)} تقييم</span></div>
             ${drv.plate_number ? `<div class="plate"><span>السودان</span><span>${esc(drv.plate_number)}</span></div>` : ''}
+            ${favBtnHtml(trip.driver_id)}
           </div>
           <div class="actions3">
             <button class="act dark" id="chatBtn">${icon('chat')}دردشة${unread ? `<span class="badge">${num(unread)}</span>` : ''}</button>
@@ -938,6 +964,7 @@ Screens.tracking = ({ id }) => {
           <div class="row gap8 card" style="background:#F4F6F5">${icon('flag', '', 'color:var(--ink3)')}<span class="grow" style="font-size:14px">${esc(trip.dropoff_address || 'الوجهة')}</span><b class="row gap4">${icon('payments', '', 'font-size:18px;color:var(--green)')}${money((trip.is_shared && (sh.find(x => x.rider_id === S.user.id) || {}).share) || trip.final_price || trip.offered_price)}</b></div>
           ${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon(trip.rider_id === S.user.id ? 'close' : 'logout')}${trip.rider_id === S.user.id ? 'إلغاء المشوار' : 'انسحاب'}</button>` : ''}`;
         $('#chatBtn').onclick = () => go('chat', { id });
+        bindFavButtons($('#sheet'), () => drv, render);
         if (trip.rider_id !== S.user.id && $('#cancelBtn')) $('#cancelBtn').onclick = async () => {
           if (!(await confirmBox('تنسحب من الطرحة؟', 'السواق والركاب التانيين بيكملوا من غيرك.', 'انسحاب', true))) return;
           const ok = await safe(() => rpc('leave_shared_trip', { p_trip: id })); if (ok !== undefined) home();
@@ -1094,6 +1121,16 @@ Screens.rating = ({ id }) => {
       const o = await getProfile(otherId);
       if (!iAmRider) { $('#rTitle').textContent = 'المشوار اكتمل'; }
       $('#rName').textContent = (o.full_name || '') + '؟';
+      if (iAmRider) {
+        const host = $('#rName').closest('.row');
+        const paintFav = async () => {
+          const old = $('[data-fav]', host); old && old.remove();
+          host.insertAdjacentHTML('beforeend', favBtnHtml(otherId, true));
+          const dp = await getDriverPublic(otherId);
+          bindFavButtons(host, () => dp, paintFav);
+        };
+        paintFav();
+      }
       $('#rAv').innerHTML = initial(o.full_name);
       $('#rSub').textContent = `${trip.dropoff_address || ''} · ${trip.completed_at ? timeStr(trip.completed_at) : ''}`;
       let pay = trip.final_price;
@@ -1208,6 +1245,7 @@ Screens.account = () => ({
     ${S.profile?.role === 'admin' ? `<button class="list-btn" id="adminBtn" style="background:var(--yellow-soft)">${icon('admin_panel_settings')}<span class="grow"><b>لوحة الإدارة</b><br><span class="small muted">قبول السواقين، الاشتراكات، الأسعار</span></span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>` : ''}
     <div class="col gap8">
       <button class="list-btn" id="supportBtn">${icon('support_agent')}<span class="grow col"><span>الدعم والمساعدة</span><span class="small muted">دردش مع فريق ركشتي</span></span><span id="supBadge"></span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>
+      <button class="list-btn" id="favBtn">${icon('favorite', 'f', 'color:#E0245E')}<span class="grow col"><span>سواقيني المفضلين</span><span class="small muted">احفظ سواقينك واطلبهم مباشرة</span></span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>
       <button class="list-btn" id="myRpBtn">${icon('flag')}<span class="grow">بلاغاتي</span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>
       <button class="list-btn" id="logout" style="color:var(--red)">${icon('logout')}<span class="grow">تسجيل خروج</span></button>
     </div>
@@ -1245,6 +1283,7 @@ Screens.account = () => ({
     const ad = $('#adminBtn'); ad && (ad.onclick = () => go('admin'));
     $('#supportBtn').onclick = () => go('support');
     $('#myRpBtn').onclick = () => go('myReports');
+    $('#favBtn').onclick = () => go('favorites');
     sb.from('support_threads').select('unread_user').eq('user_id', S.user.id).maybeSingle().then(({ data }) => {
       if (data && data.unread_user && $('#supBadge')) $('#supBadge').innerHTML = `<span class="pill yellow" style="background:var(--yellow);color:var(--ink)">${num(data.unread_user)}</span>`;
     });
@@ -1405,7 +1444,7 @@ Screens.driverHome = () => {
           reqLayer.clearLayers(); $('#reqCount').textContent = '';
           box.innerHTML = `<div class="row gap12 card" style="background:#F4F6F5">${icon('bedtime', '', 'color:var(--ink3);font-size:28px')}<div class="col"><b>إنت غير متاح</b><span class="small muted">دوس «متاح» فوق عشان تبدأ تستلم طلبات</span></div></div>`; return;
         }
-        const { data } = await sb.rpc('open_requests_v2', { radius_m: 4000 });
+        const { data } = await sb.rpc('open_requests_v3', { radius_m: 4000 });
         if (map._dead) return;
         reqs = data || [];
         $('#reqCount').innerHTML = reqs.length ? `<span class="pill yellow" style="background:var(--yellow);color:var(--ink)">${num(reqs.length)} طلب</span>` : '';
@@ -1414,7 +1453,7 @@ Screens.driverHome = () => {
           .on('click', () => openRequest(reqs[i])).addTo(reqLayer));
         box.innerHTML = reqs.length ? reqs.map((r, i) => `<button class="driver-item" data-r="${i}" style="flex-direction:column;align-items:stretch;gap:8px">
           <span class="row gap8"><span class="avatar grey" style="width:40px;height:40px">${initial(r.rider_name)}</span>
-            <span class="col grow"><b style="font-size:15px">${esc(r.rider_name || 'راكب')}${r.is_shared ? ` <span class="pill yellow">${icon('group', '', 'font-size:13px')}طرحة · ${num(r.riders)}</span>` : ''}</b>
+            <span class="col grow"><b style="font-size:15px">${esc(r.rider_name || 'راكب')}${r.is_preferred ? ` <span class="pill" style="background:var(--red-soft);color:#B4134A">${icon('favorite', 'f', 'font-size:13px')}طلبك إنت</span>` : ''}${r.is_shared ? ` <span class="pill yellow">${icon('group', '', 'font-size:13px')}طرحة · ${num(r.riders)}</span>` : ''}</b>
               <span class="small muted row gap4">${icon('star', 'f', 'font-size:14px;color:var(--star)')}${num(r.rider_rating || 5)} · على بعد ${distStr(r.away_m)}</span></span>
             <span class="price">${money(r.offered_price)}</span></span>
           <span class="row small muted gap4">${icon('trip_origin', '', 'font-size:16px;color:var(--blue)')}<span class="grow" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.pickup_address || '')}</span></span>
@@ -1682,6 +1721,109 @@ async function renderSub() {
 
 
 
+
+/* ---------- السواقين المفضلين ---------- */
+const FAV_CATS = {
+  trusted: ['verified_user', 'سواق ثقة'],
+  family: ['family_restroom', 'للعيلة والأولاد'],
+  neighbor: ['home', 'جار أو معرفة'],
+  daily: ['event_repeat', 'مشاويري اليومية'],
+  other: ['bookmark', 'غيره']
+};
+async function loadFavIds() {
+  const { data } = await sb.from('favorite_drivers').select('driver_id');
+  S.favs = new Set((data || []).map(x => x.driver_id));
+}
+const isFav = (id) => !!(S.favs && S.favs.has(id));
+const favBtnHtml = (id, big) => `<button type="button" class="icon-btn" data-fav="${id}" aria-label="${isFav(id) ? 'في المفضلة' : 'احفظ في المفضلة'}" aria-pressed="${isFav(id)}"
+  style="${big ? 'width:48px;height:48px;' : ''}background:${isFav(id) ? 'var(--red-soft)' : 'var(--bg)'}">${icon('favorite', isFav(id) ? 'f' : '', `color:${isFav(id) ? '#E0245E' : 'var(--ink3)'}`)}</button>`;
+
+// نافذة الحفظ/التعديل: اسم تختاره + تصنيف + ملاحظة
+function openFavEditor({ driverId, realName = '', plate = '', onDone } = {}) {
+  sb.from('favorite_drivers').select('*').eq('driver_id', driverId).maybeSingle().then(({ data: ex }) => {
+    let cat = ex?.category || 'trusted';
+    const suggestion = ex?.nickname || (realName ? realName.split(' ')[0] : '');
+    modal(`<div class="row gap8">${icon('favorite', 'f', 'color:#E0245E')}<h2 style="margin:0;font-size:20px" class="grow">${ex ? 'تعديل السواق المفضل' : 'احفظ في سواقيني'}</h2></div>
+      <div class="card row gap12" style="background:#F4F6F5"><span class="rk y">${icon('electric_rickshaw', 'f', 'font-size:24px')}</span>
+        <div class="col grow"><b>${esc(realName || 'السواق')}</b><span class="small muted">الاسم في التطبيق</span></div>
+        ${plate ? `<div class="plate"><span>السودان</span><span>${esc(plate)}</span></div>` : ''}</div>
+      <div class="field"><label for="fvName">تسميه بشنو؟</label>
+        <input class="input" id="fvName" maxlength="40" value="${esc(suggestion)}" placeholder="مثلاً: عم عبدالله جارنا"></div>
+      <div class="col gap8"><b style="font-size:14px">التصنيف</b>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">${Object.entries(FAV_CATS).map(([k, [ic, l]]) =>
+          `<button type="button" class="chip ${k === cat ? 'on' : ''}" data-fc="${k}" aria-pressed="${k === cat}" style="height:46px;border-radius:14px;justify-content:flex-start">${icon(ic, '', 'font-size:18px')}${l}</button>`).join('')}</div></div>
+      <div class="field"><label for="fvNote">ملاحظة (اختياري)</label>
+        <input class="input" id="fvNote" maxlength="120" value="${esc(ex?.note || '')}" placeholder="مثلاً: بيعرف بيتنا، بيوصّل الأولاد المدرسة"></div>
+      <button class="btn" id="fvSave">${icon('check')}${ex ? 'حفظ التعديل' : 'حفظ في المفضلة'}</button>
+      ${ex ? `<button class="btn danger" id="fvDel">${icon('heart_broken')}شيله من المفضلة</button>` : ''}`,
+    (o, close) => {
+      $$('[data-fc]', o).forEach(b => b.onclick = () => { cat = b.dataset.fc; $$('[data-fc]', o).forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); });
+      $('#fvSave', o).onclick = async (e) => {
+        const name = $('#fvName', o).value.trim();
+        if (!name) return toast('اكتب اسم للسواق', 'error');
+        e.currentTarget.disabled = true;
+        const ok = await safe(async () => {
+          const { error } = await sb.from('favorite_drivers').upsert({ rider_id: S.user.id, driver_id: driverId, nickname: name, category: cat, note: $('#fvNote', o).value.trim() || null }, { onConflict: 'rider_id,driver_id' });
+          if (error) throw error; return true;
+        }, ex ? 'اتحفظ التعديل' : 'اتحفظ في سواقيني ❤');
+        if (ok) { (S.favs = S.favs || new Set()).add(driverId); haptic(); close(); onDone && onDone(true); } else e.currentTarget.disabled = false;
+      };
+      const del = $('#fvDel', o);
+      del && (del.onclick = async () => {
+        const ok = await safe(async () => { const { error } = await sb.from('favorite_drivers').delete().eq('driver_id', driverId).eq('rider_id', S.user.id); if (error) throw error; return true; }, 'اتشال من المفضلة');
+        if (ok) { S.favs && S.favs.delete(driverId); close(); onDone && onDone(false); }
+      });
+    });
+  });
+}
+function bindFavButtons(root, info, rerender) {
+  $$('[data-fav]', root).forEach(b => b.onclick = () => {
+    const d = info(b.dataset.fav) || {};
+    openFavEditor({ driverId: b.dataset.fav, realName: d.full_name, plate: d.plate_number, onDone: rerender });
+  });
+}
+
+Screens.favorites = () => ({
+  html: `<div class="screen" style="background:var(--bg)">
+    <div class="topbar"><button class="icon-btn" data-back aria-label="رجوع">${icon('arrow_forward')}</button><h1>سواقيني المفضلين</h1></div>
+    <div class="scroll pad col gap12" id="fvList"><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div></div>`,
+  async mount(root) {
+    bindBack(root);
+    const load = async () => {
+      const { data } = await sb.rpc('my_favorite_drivers', { lat: lastPos ? lastPos[0] : null, lng: lastPos ? lastPos[1] : null });
+      const list = data || [], box = $('#fvList'); if (!box) return;
+      if (!list.length) {
+        box.innerHTML = `<div class="empty">${icon('favorite')}<b>لسه ما حفظت سواق</b><span class="small" style="line-height:1.7">لما يعجبك سواق، دوس ❤ في شاشة المشوار أو بعد التقييم، وسمّيه بالاسم البتعرفه بيه. بعدها بتقدر تطلبه هو مباشرة.</span></div>`;
+        return;
+      }
+      const avail = list.filter(x => x.is_available).length;
+      const groups = Object.keys(FAV_CATS).map(k => [k, list.filter(x => x.category === k)]).filter(([, xs]) => xs.length);
+      box.innerHTML = `
+        <div class="row gap8 card" style="background:${avail ? 'var(--green-soft)' : '#fff'}">${icon(avail ? 'wifi_tethering' : 'wifi_tethering_off', '', `color:${avail ? 'var(--green-ink)' : 'var(--ink3)'}`)}
+          <span class="small grow">${avail ? `<b>${num(avail)}</b> من سواقينك متاحين هسع` : 'ما في واحد من سواقينك متاح هسع'}</span><span class="small muted">${num(list.length)} محفوظ</span></div>
+        ${groups.map(([k, xs]) => `
+          <div class="row gap8" style="margin-top:4px">${icon(FAV_CATS[k][0], '', 'font-size:18px;color:var(--ink3)')}<b style="font-size:14px;color:var(--ink2)">${FAV_CATS[k][1]}</b><span class="small muted">· ${num(xs.length)}</span></div>
+          ${xs.map(d => `<div class="card col gap12">
+            <div class="row gap12">
+              <div style="position:relative"><div class="avatar" style="width:52px;height:52px;border-radius:16px">${d.avatar_url ? `<img src="${esc(d.avatar_url)}" alt="">` : initial(d.nickname)}</div>
+                <span style="position:absolute;bottom:-3px;left:-3px;width:14px;height:14px;border-radius:50%;border:2px solid #fff;background:${d.is_available ? 'var(--green)' : '#C9D1CC'}"></span></div>
+              <div class="col grow gap4" style="min-width:0"><b style="font-size:17px">${esc(d.nickname)}</b>
+                <span class="small muted">${esc(d.full_name || '')} · ${icon('star', 'f', 'font-size:13px;color:var(--star)')} ${num(d.rating_avg || 5)}${d.trips_together ? ` · ${num(d.trips_together)} مشوار معاك` : ''}</span></div>
+              ${d.plate_number ? `<div class="plate"><span>السودان</span><span>${esc(d.plate_number)}</span></div>` : ''}</div>
+            ${d.note ? `<span class="small" style="background:#F4F6F5;border-radius:10px;padding:8px 10px;line-height:1.6">${icon('sticky_note_2', '', 'font-size:14px;color:var(--ink3)')} ${esc(d.note)}</span>` : ''}
+            <div class="row gap8">
+              <button class="btn sm ${d.is_available ? '' : 'ghost'}" data-req="${d.driver_id}" ${d.is_available ? '' : 'disabled'}>${icon(d.is_available ? 'electric_rickshaw' : 'schedule')}${d.is_available ? `اطلبه${d.distance_m != null ? ' · ' + num(etaMin(d.distance_m)) + ' د' : ''}` : 'غير متاح هسع'}</button>
+              <a class="icon-btn" href="tel:${esc(d.phone || '')}" aria-label="اتصال">${icon('call')}</a>
+              <button class="icon-btn" data-edit="${d.driver_id}" aria-label="تعديل">${icon('edit')}</button>
+            </div></div>`).join('')}`).join('')}`;
+      const byId = {}; list.forEach(d => byId[d.driver_id] = d);
+      $$('[data-req]', box).forEach(b => b.onclick = () => { const d = byId[b.dataset.req]; go('riderHome', { preferred: { id: d.driver_id, name: d.nickname } }, { root: true }); });
+      $$('[data-edit]', box).forEach(b => b.onclick = () => { const d = byId[b.dataset.edit]; openFavEditor({ driverId: d.driver_id, realName: d.full_name, plate: d.plate_number, onDone: load }); });
+    };
+    load();
+    every(20000, load);
+  }
+});
 
 /* ---------- نظام البلاغات (مختلف للراكب والسواق) ---------- */
 // [المفتاح، الأيقونة، العنوان، وصف قصير]

@@ -1,5 +1,5 @@
 // اختبار شامل من البداية للنهاية: راكب + سواق في متصفحين، ضد Supabase الحقيقي
-// run 15
+// run 16 — السواقين المفضلين
 // يشتغل في GitHub Actions (انظر .github/workflows/e2e.yml)
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -189,6 +189,16 @@ async function step(name, pages, fn) {
     await r2.waitForSelector('#send', { timeout: 25000 });
     await shot(rp, 'rider-rating'); await shot(r2, 'rider2-rating');
   });
+  await step('save driver to favorites from rating (name + category)', both, async () => {
+    await rp.waitForSelector('[data-fav]', { timeout: 10000 }); await rp.click('[data-fav]');
+    await rp.waitForSelector('#fvName');
+    await rp.fill('#fvName', 'عم الاختبار جارنا');
+    await rp.click('[data-fc="neighbor"]'); await rp.fill('#fvNote', 'بيعرف البيت');
+    await shot(rp, 'rider-fav-editor');
+    await rp.click('#fvSave');
+    await rp.waitForSelector('.overlay', { state: 'detached', timeout: 10000 });
+    await rp.waitForSelector('[data-fav][aria-pressed="true"]', { timeout: 10000 });
+  });
   await step('no horizontal overflow on rating screen', both, async () => {
     const over = await rp.evaluate(() => [...document.querySelectorAll('.btn')].filter(b => { const r = b.getBoundingClientRect(); return r.width && (r.left < -1 || r.right > innerWidth + 1); }).map(b => b.textContent.trim()));
     if (over.length) throw new Error('overflowing: ' + over.join(' | '));
@@ -231,6 +241,28 @@ async function step(name, pages, fn) {
     await r2.waitForSelector('.overlay', { state: 'detached', timeout: 10000 });
   });
   await step('waiting timer renders', both, async () => {});
+  await step('favorites screen grouped by category', both, async () => {
+    await rp.click('[data-nav="account"]'); await rp.click('#favBtn');
+    await rp.waitForSelector('#fvList .card:has-text("عم الاختبار جارنا")', { timeout: 15000 });
+    await rp.waitForSelector('#fvList:has-text("جار أو معرفة")');
+    await shot(rp, 'rider-favorites');
+  });
+  await step('request favorite driver directly → driver sees "طلبك إنت"', both, async () => {
+    await rp.waitForSelector('[data-req]:not([disabled])', { timeout: 25000 });
+    await rp.click('[data-req]');
+    await rp.waitForSelector('#clearPref', { timeout: 15000 });
+    const box = await rp.locator('#map').boundingBox();
+    await rp.mouse.click(box.x + box.width * 0.3, box.y + 160);
+    await rp.waitForSelector('#reqBtn:has-text("عم الاختبار")', { timeout: 20000 });
+    await shot(rp, 'rider-pref-request');
+    await rp.click('#reqBtn');
+    await rp.waitForSelector('#cancel', { timeout: 15000 });
+    await dp.click('[data-nav="driverHome"]').catch(() => {});
+    await dp.waitForSelector('[data-r]:has-text("طلبك إنت")', { timeout: 30000 });
+    await shot(dp, 'driver-pref-request'); await shot(rp, 'rider-pref-waiting');
+    await rp.click('#cancel'); await rp.click('[data-ok]');
+    await rp.waitForSelector('.nav', { timeout: 15000 });
+  });
   await step('support chat', both, async () => {
     await rp.click('[data-nav="account"]');
     await rp.click('#supportBtn');
