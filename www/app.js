@@ -379,6 +379,7 @@ function routeFollower(map) {
       if (!moved) return info;
       lastFrom = from; lastTo = to;
       info = await getRoute(from, to);
+      if (map._dead) return info;
       line.setLatLngs(info.coords);
       return info;
     },
@@ -548,7 +549,7 @@ Screens.riderHome = () => {
       bindNav(root);
       map = makeMap($('#map'), lastPos || C.DEFAULT_CENTER);
       driverLayer.addTo(map);
-      onLeave(() => map.remove());
+      onLeave(() => { map._dead = true; map.remove(); });
       const setPickup = async (p) => {
         pickup = p;
         if (!meMk) {
@@ -583,6 +584,7 @@ Screens.riderHome = () => {
         $('#destIn').value = d.name;
         $('#results').innerHTML = '';
         const r = await getRoute(pickup, [d.lat, d.lng]);
+        if (map._dead) return;
         km = r.km; routeMin = r.min;
         price = suggestPrice(km);
         if (routeLine) routeLine.remove();
@@ -745,12 +747,12 @@ Screens.tracking = ({ id }) => {
       if (trip.status === 'cancelled') { toast('المشوار اتلغى'); return home(); }
       drv = await getDriverPublic(trip.driver_id);
       map = makeMap($('#map'), trip._pickup, 15);
-      onLeave(() => map.remove());
+      onLeave(() => { map._dead = true; map.remove(); });
       L.marker(trip._pickup, { icon: meIcon() }).addTo(map);
       L.marker(trip._dropoff, { icon: destIcon() }).addTo(map);
       const rf = routeFollower(map);
       const updDriver = async (loc) => {
-        if (!loc) return;
+        if (!loc || map._dead) return;
         drv._loc = loc;
         if (!drvMk) drvMk = L.marker(loc, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map); else drvMk.setLatLng(loc);
         const target = trip.status === 'in_progress' ? trip._dropoff : trip._pickup;
@@ -761,9 +763,11 @@ Screens.tracking = ({ id }) => {
       map.fitBounds(L.latLngBounds([trip._pickup, trip._dropoff].concat(drv._loc ? [drv._loc] : [])).pad(0.35), { paddingBottomRight: [0, 300] });
 
       const render = async () => {
+        if (!$('#stTxt')) return;
         $('#stTxt').textContent = STATUS_AR[trip.status];
         const idx = STEP_IDX[trip.status] || 1;
         const unread = await unreadCount(id);
+        if (!$('#sheet')) return;
         $('#sheet').innerHTML = `<div class="grab"></div>
           <div class="col gap8"><div class="progress">${[1, 2, 3, 4].map(i => `<i class="${i <= idx ? 'on' : ''}"></i>`).join('')}</div>
             <div class="row small muted" style="justify-content:space-between"><span>تم القبول</span><span>في الطريق</span><span>وصل</span><span>المشوار</span></div></div>
@@ -1162,7 +1166,7 @@ Screens.driverHome = () => {
       if (S.driver?.status !== 'approved') { await setMode('rider'); return home(); }
       map = makeMap($('#map'), lastPos || C.DEFAULT_CENTER, 15);
       reqLayer.addTo(map);
-      onLeave(() => map.remove());
+      onLeave(() => { map._dead = true; map.remove(); });
       const p = await getPos(); map.setView(p, 15);
       meMk = L.marker(p, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map);
       sb.rpc('update_my_location', { lat: p[0], lng: p[1] }).then(() => {});
@@ -1281,7 +1285,7 @@ Screens.driverTrip = ({ id }) => {
       rider = await getProfile(trip.rider_id);
       Loc.start(); // الراكب يتابعك
       map = makeMap($('#map'), trip._pickup, 15);
-      onLeave(() => map.remove());
+      onLeave(() => { map._dead = true; map.remove(); });
       L.marker(trip._pickup, { icon: meIcon() }).addTo(map);
       L.marker(trip._dropoff, { icon: destIcon() }).addTo(map);
       const p = await getPos(); meMk = L.marker(p, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map);
@@ -1289,12 +1293,12 @@ Screens.driverTrip = ({ id }) => {
       let follow = true;
       map.on('dragstart', () => { follow = false; });
       const refreshRoute = async () => {
-        if (!lastPos) return;
+        if (!lastPos || map._dead) return;
         meMk.setLatLng(lastPos);
         const target = trip.status === 'in_progress' ? trip._dropoff : trip._pickup;
         const r = await rf.update(lastPos, target);
         if (r && $('#navInfo')) $('#navInfo').innerHTML = `<b style="font-size:20px">${num(r.min)} د</b><span class="small muted">${num(r.km.toFixed(1))} كم ${trip.status === 'in_progress' ? 'للوجهة' : 'للراكب'}</span>`;
-        if (follow) map.panTo(lastPos, { animate: true });
+        if (follow && !map._dead) map.panTo(lastPos, { animate: true });
       };
       const first = await rf.update(p, trip.status === 'in_progress' ? trip._dropoff : trip._pickup);
       map.fitBounds(L.polyline(first.coords).getBounds().pad(0.3), { paddingBottomRight: [0, 340] });
@@ -1305,10 +1309,12 @@ Screens.driverTrip = ({ id }) => {
       if (trip.status === 'in_progress') Meter.start(id, trip.traveled_km);
 
       const render = async () => {
+        if (!$('#stTxt')) return;
         $('#stTxt').textContent = STATUS_AR[trip.status];
         const nx = NEXT[trip.status];
         const target = trip.status === 'in_progress' ? trip._dropoff : trip._pickup;
         const unread = await unreadCount(id);
+        if (!$('#sheet')) return;
         $('#sheet').innerHTML = `<div class="grab"></div>
           <div class="row gap12"><div class="avatar grey" style="width:54px;height:54px;border-radius:16px">${rider.avatar_url ? `<img src="${esc(rider.avatar_url)}" alt="">` : initial(rider.full_name)}</div>
             <div class="col grow gap4"><b style="font-size:17px">${esc(rider.full_name || 'الراكب')}</b><span class="small muted row gap4">${icon('star', 'f', 'font-size:14px;color:var(--star)')}${num(rider.rating_avg || 5)}</span></div>
