@@ -1,0 +1,11 @@
+{
+  "appId": "com.rickshawi.app",
+  "appName": "ركشتي",
+  "webDir": "www",
+  "server": { "androidScheme": "https" },
+  "android": { "allowMixedContent": false },
+  "plugins": {
+    "SplashScreen": { "launchShowDuration": 1500, "backgroundColor": "#FFC800", "showSpinner": false, "androidScaleType": "CENTER_CROP" },
+    "StatusBar": { "style": "DARK", "backgroundColor": "#0F1A14" }
+  }
+}

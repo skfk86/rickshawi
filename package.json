@@ -1,0 +1,32 @@
+{
+  "name": "rickshawi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ركشتي — تطبيق طلب الركشات في السودان",
+  "scripts": {
+    "libs": "node scripts/copy-libs.js",
+    "sync": "npm run libs && npx cap sync android",
+    "android": "npm run sync && npx cap open android",
+    "build:debug": "npm run sync && cd android && ./gradlew assembleDebug",
+    "build:release": "npm run sync && cd android && ./gradlew bundleRelease assembleRelease",
+    "serve": "npm run libs && npx http-server www -p 8080 -c-1"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/app": "^6.0.2",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/geolocation": "^6.1.0",
+    "@capacitor/haptics": "^6.0.2",
+    "@capacitor/network": "^6.0.3",
+    "@capacitor/preferences": "^6.0.3",
+    "@capacitor/share": "^6.0.3",
+    "@capacitor/splash-screen": "^6.0.3",
+    "@capacitor/status-bar": "^6.0.2",
+    "@supabase/supabase-js": "^2.45.4",
+    "leaflet": "1.9.4"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^6.2.0"
+  }
+}
