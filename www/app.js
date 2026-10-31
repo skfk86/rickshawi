@@ -175,7 +175,18 @@ async function reverse(lat, lng) {
 /* ---------- Map helpers ---------- */
 function makeMap(el, center, zoom = 15) {
   const m = L.map(el, { zoomControl: false, attributionControl: true }).setView(center, zoom);
-  L.tileLayer(C.TILES, { attribution: C.TILES_ATTR, maxZoom: 19, subdomains: 'abcd' }).addTo(m);
+  const useFallback = sessionStorage.getItem('rk_tiles') === 'fb';
+  const layer = L.tileLayer(useFallback ? C.TILES_FALLBACK : C.TILES, { attribution: useFallback ? C.TILES_FALLBACK_ATTR : C.TILES_ATTR, maxZoom: 19 }).addTo(m);
+  if (!useFallback) {
+    let errs = 0;
+    layer.on('tileerror', () => {
+      if (++errs === 4) {
+        sessionStorage.setItem('rk_tiles', 'fb');
+        m.removeLayer(layer);
+        L.tileLayer(C.TILES_FALLBACK, { attribution: C.TILES_FALLBACK_ATTR, maxZoom: 19 }).addTo(m);
+      }
+    });
+  }
   return m;
 }
 const rkIcon = (label) => L.divIcon({
@@ -485,7 +496,12 @@ Screens.riderHome = () => {
         const near = drivers.length
           ? `<div class="row" style="justify-content:space-between"><h2 style="margin:0;font-size:17px">${dest ? 'السعر المقترح' : 'أقرب الركشات'}</h2><span class="small muted row gap4">${icon('electric_rickshaw', '', 'font-size:16px')}${num(drivers.length)} متاحة · أقرب واحدة ${num(etaMin(drivers[0].distance_m))} د</span></div>`
           : `<div class="row gap8 card" style="background:var(--yellow-soft)">${icon('info', '', 'color:#7A5A00')}<span class="small">ما في ركشات متاحة قريبة هسع — ممكن ترسل طلبك وأول سواق يتاح بيشوفه.</span></div>`;
-        if (!dest) { b.innerHTML = near; return; }
+        const list = drivers.slice(0, 3).map((d, i) => `<div class="driver-item ${i === 0 ? 'sel' : ''}">
+            <span class="rk ${i === 0 ? 'y' : ''}">${icon('electric_rickshaw', 'f', 'font-size:26px')}</span>
+            <span class="col grow gap4"><b style="font-size:15px">${esc(d.full_name || 'سواق')}</b>
+              <span class="small muted row gap4">${icon('star', 'f', 'font-size:14px;color:var(--star)')}${num(d.rating_avg || 5)} · ${num(etaMin(d.distance_m))} د · ${distStr(d.distance_m)}</span></span>
+            ${d.plate_number ? `<span class="plate"><span>السودان</span><span>${esc(d.plate_number)}</span></span>` : ''}</div>`).join('');
+        if (!dest) { b.innerHTML = near + (list ? `<div class="col gap8">${list}</div><p class="small muted" style="margin:0;text-align:center">اكتب وجهتك عشان تشوف السعر وتطلب</p>` : ''); return; }
         b.innerHTML = `${near}
           <div class="card row" style="background:#F4F6F5;justify-content:space-between">
             <div class="col"><span class="small muted">${num(km.toFixed(1))} كم · حوالي ${num(Math.round(km / 18 * 60) + 2)} دقيقة</span><span class="small muted">السواقين ممكن يقترحوا سعر تاني</span></div>
@@ -874,6 +890,7 @@ Screens.account = () => ({
       <button class="icon-btn" id="editName" aria-label="تعديل الاسم">${icon('edit')}</button>
     </div>
     ${driverCard()}
+    ${S.profile?.role === 'admin' ? `<button class="list-btn" id="adminBtn" style="background:var(--yellow-soft)">${icon('admin_panel_settings')}<span class="grow"><b>لوحة الإدارة</b><br><span class="small muted">قبول السواقين، الاشتراكات، الأسعار</span></span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>` : ''}
     <div class="col gap8">
       <a class="list-btn" href="tel:${esc(C.SUPPORT_PHONE)}" style="text-decoration:none">${icon('support_agent')}<span class="grow">الدعم والمساعدة</span>${icon('chevron_left', '', 'color:var(--ink3)')}</a>
       <button class="list-btn" id="logout" style="color:var(--red)">${icon('logout')}<span class="grow">تسجيل خروج</span></button>
@@ -909,6 +926,7 @@ Screens.account = () => ({
       Loc.stop(); await setMode(next); routeToActive();
     });
     const bd = $('#becomeDriver'); bd && (bd.onclick = () => go('driverSignup'));
+    const ad = $('#adminBtn'); ad && (ad.onclick = () => go('admin'));
   }
 });
 function driverCard() {
@@ -1268,6 +1286,136 @@ async function renderSub() {
     };
   }));
 }
+
+
+/* ---------- Admin ---------- */
+Screens.admin = ({ tab = 'drivers' } = {}) => ({
+  html: `<div class="screen" style="background:var(--bg)">
+    <div class="topbar"><button class="icon-btn" data-back aria-label="رجوع">${icon('arrow_forward')}</button><h1>لوحة الإدارة</h1></div>
+    <div style="padding:12px 16px 0"><div class="seg" role="tablist">
+      ${[['drivers', 'السواقين'], ['subs', 'الاشتراكات'], ['stats', 'الإحصائيات'], ['settings', 'الإعدادات']].map(([k, l]) => `<button role="tab" data-t="${k}" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${l}</button>`).join('')}
+    </div></div>
+    <div class="scroll pad col gap8" id="adm"><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
+  </div>`,
+  async mount(root) {
+    bindBack(root);
+    $$('[data-t]').forEach(b => b.onclick = () => go('admin', { tab: b.dataset.t }, { replace: true }));
+    const box = $('#adm');
+    const signed = async (bucket, path) => (await sb.storage.from(bucket).createSignedUrl(path, 3600)).data?.signedUrl;
+    const DOCN = { photo: 'الصورة', license: 'الرخصة', vehicle_registration: 'شهادة البحث', vehicle_photo: 'الركشة' };
+
+    if (tab === 'drivers') {
+      const { data: ds } = await sb.from('drivers').select('*').order('created_at', { ascending: false });
+      const list = ds || [];
+      if (!list.length) { box.innerHTML = `<div class="empty">${icon('badge')}<b>ما في سواقين مسجلين لسه</b></div>`; return; }
+      const ids = list.map(d => d.id);
+      const [{ data: ps }, { data: docs }] = await Promise.all([
+        sb.from('profiles').select('id,full_name,phone').in('id', ids),
+        sb.from('driver_documents').select('*').in('driver_id', ids)
+      ]);
+      const pm = {}; (ps || []).forEach(p => pm[p.id] = p);
+      const order = { pending: 0, approved: 1, suspended: 2, rejected: 3 };
+      list.sort((a, b) => order[a.status] - order[b.status]);
+      const urls = {};
+      await Promise.all((docs || []).map(async d => { urls[d.id] = await signed('driver-docs', d.file_path); }));
+      const ST = { pending: ['yellow', 'قيد المراجعة'], approved: ['green', 'مقبول'], rejected: ['red', 'مرفوض'], suspended: ['red', 'موقوف'] };
+      box.innerHTML = list.map(d => {
+        const p = pm[d.id] || {}, dd = (docs || []).filter(x => x.driver_id === d.id);
+        return `<div class="card col gap12">
+          <div class="row gap8"><div class="avatar grey">${initial(p.full_name)}</div>
+            <div class="col grow"><b>${esc(p.full_name || '')}</b><a class="small muted" href="tel:${esc(p.phone || '')}" style="direction:ltr;text-align:right">${esc(p.phone || '')}</a></div>
+            <span class="pill ${ST[d.status][0]}">${ST[d.status][1]}</span></div>
+          <span class="small muted">لوحة ${esc(d.plate_number || '—')} · ${esc(d.vehicle_color || '')}${d.bankak_account ? ' · بنكك ' + esc(d.bankak_account) : ''}</span>
+          <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px">${['photo', 'license', 'vehicle_registration', 'vehicle_photo'].map(k => {
+            const doc = dd.find(x => x.type === k);
+            return doc && urls[doc.id]
+              ? `<a href="${urls[doc.id]}" style="text-decoration:none;color:inherit" class="col gap4"><img src="${urls[doc.id]}" alt="${DOCN[k]}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;background:#eee"><span class="small" style="text-align:center">${DOCN[k]}</span></a>`
+              : `<div class="col gap4"><div style="aspect-ratio:1;border-radius:10px;border:2px dashed #C9D1CC;display:flex;align-items:center;justify-content:center">${icon('hide_image', '', 'color:#B8C0BB')}</div><span class="small muted" style="text-align:center">${DOCN[k]}</span></div>`;
+          }).join('')}</div>
+          <div class="row gap8">
+            ${d.status !== 'approved' ? `<button class="btn sm" data-set="${d.id}:approved">${icon('check')}قبول</button>` : ''}
+            ${d.status === 'pending' ? `<button class="btn sm ghost" data-set="${d.id}:rejected" style="color:var(--red)">رفض</button>` : ''}
+            ${d.status === 'approved' ? `<button class="btn sm ghost" data-set="${d.id}:suspended" style="color:var(--red)">${icon('block')}إيقاف</button>` : ''}
+          </div></div>`;
+      }).join('');
+      $$('[data-set]').forEach(b => b.onclick = async () => {
+        const [id, st] = b.dataset.set.split(':');
+        if (st !== 'approved' && !(await confirmBox('متأكد؟', st === 'rejected' ? 'السواق ده ما حيقدر يستلم مشاوير.' : 'السواق بيتوقف من استلام المشاوير.', 'تأكيد', true))) return;
+        const patch = { status: st }; if (st !== 'approved') patch.is_online = false;
+        const ok = await safe(async () => {
+          const { error } = await sb.from('drivers').update(patch).eq('id', id); if (error) throw error;
+          if (st === 'approved') await sb.from('driver_documents').update({ verified: true }).eq('driver_id', id);
+          return true;
+        }, st === 'approved' ? 'السواق اتقبل' : 'اتحفظ');
+        if (ok) go('admin', { tab }, { replace: true });
+      });
+    }
+
+    if (tab === 'subs') {
+      const { data: ss } = await sb.from('subscriptions').select('*').order('created_at', { ascending: false }).limit(50);
+      const list = ss || [];
+      if (!list.length) { box.innerHTML = `<div class="empty">${icon('workspace_premium')}<b>ما في طلبات اشتراك</b></div>`; return; }
+      const { data: ps } = await sb.from('profiles').select('id,full_name,phone').in('id', [...new Set(list.map(s => s.driver_id))]);
+      const pm = {}; (ps || []).forEach(p => pm[p.id] = p);
+      const urls = {}; await Promise.all(list.filter(s => s.receipt_path).map(async s => { urls[s.id] = await signed('receipts', s.receipt_path); }));
+      const ST = { pending: ['yellow', 'منتظر'], active: ['green', 'فعّال'], rejected: ['red', 'مرفوض'], expired: ['grey', 'منتهي'] };
+      box.innerHTML = list.map(s => {
+        const p = pm[s.driver_id] || {};
+        return `<div class="card col gap8">
+          <div class="row gap8"><div class="col grow"><b>${esc(p.full_name || '')}</b><span class="small muted">${new Date(s.created_at).toLocaleString('ar-EG')}</span></div>
+            <b>${money(s.amount)}</b><span class="pill ${ST[s.status][0]}">${ST[s.status][1]}</span></div>
+          <span class="small">رقم العملية: <b>${esc(s.bankak_ref || '—')}</b>${s.ends_at ? ` · ينتهي ${new Date(s.ends_at).toLocaleDateString('ar-EG')}` : ''}</span>
+          ${urls[s.id] ? `<a href="${urls[s.id]}"><img src="${urls[s.id]}" alt="الإشعار" style="width:100%;max-height:220px;object-fit:contain;border-radius:12px;background:#F4F6F5"></a>` : ''}
+          ${s.status === 'pending' ? `<div class="row gap8"><button class="btn sm" data-act="${s.id}">${icon('check')}تفعيل ٣٠ يوم</button><button class="btn sm ghost" data-rej="${s.id}" style="color:var(--red)">رفض</button></div>` : ''}
+        </div>`;
+      }).join('');
+      $$('[data-act]').forEach(b => b.onclick = async () => {
+        const now = new Date(), end = new Date(now.getTime() + 30 * 86400000);
+        const ok = await safe(async () => { const { error } = await sb.from('subscriptions').update({ status: 'active', starts_at: now.toISOString(), ends_at: end.toISOString() }).eq('id', b.dataset.act); if (error) throw error; return true; }, 'الاشتراك اتفعّل');
+        if (ok) go('admin', { tab }, { replace: true });
+      });
+      $$('[data-rej]').forEach(b => b.onclick = async () => {
+        const ok = await safe(async () => { const { error } = await sb.from('subscriptions').update({ status: 'rejected' }).eq('id', b.dataset.rej); if (error) throw error; return true; }, 'اترفض');
+        if (ok) go('admin', { tab }, { replace: true });
+      });
+    }
+
+    if (tab === 'stats') {
+      const since = new Date(); since.setHours(0, 0, 0, 0);
+      const cnt = async (q) => (await q).count || 0;
+      const [users, drivers, online, today, done, active] = await Promise.all([
+        cnt(sb.from('profiles').select('id', { count: 'exact', head: true })),
+        cnt(sb.from('drivers').select('id', { count: 'exact', head: true }).eq('status', 'approved')),
+        cnt(sb.from('drivers').select('id', { count: 'exact', head: true }).eq('is_online', true)),
+        cnt(sb.from('trips').select('id', { count: 'exact', head: true }).gte('created_at', since.toISOString())),
+        cnt(sb.from('trips').select('id', { count: 'exact', head: true }).eq('status', 'completed').gte('created_at', since.toISOString())),
+        cnt(sb.from('trips').select('id', { count: 'exact', head: true }).in('status', ['accepted', 'arriving', 'arrived', 'in_progress']))
+      ]);
+      const tile = (ic, v, l, c = '') => `<div class="stat">${icon(ic, '', `font-size:22px;${c}`)}<b>${num(v)}</b><span class="small muted">${l}</span></div>`;
+      box.innerHTML = `<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+        ${tile('group', users, 'مستخدم')}${tile('badge', drivers, 'سواق مقبول', 'color:var(--green)')}
+        ${tile('wifi_tethering', online, 'سواق متاح هسع', 'color:var(--green)')}${tile('electric_rickshaw', active, 'مشوار شغال هسع')}
+        ${tile('today', today, 'طلب اليوم', 'color:var(--blue)')}${tile('task_alt', done, 'مشوار اكتمل اليوم', 'color:var(--green)')}</div>`;
+    }
+
+    if (tab === 'settings') {
+      const st = S.settings || {};
+      const f = (k, l, type = 'number') => `<div class="field"><label for="s_${k}">${l}</label><input class="input" id="s_${k}" type="${type}" value="${esc(st[k] ?? '')}"></div>`;
+      box.innerHTML = `<div class="card col gap12">
+        <b>الأسعار</b>${f('base_fare', 'الأجرة الأساسية (جنيه)')}${f('per_km', 'سعر الكيلو (جنيه)')}</div>
+        <div class="card col gap12"><b>الاشتراك</b>
+          <label class="row gap8" style="justify-content:space-between"><span>إلزام السواقين بالاشتراك</span><input type="checkbox" id="s_req" ${st.require_subscription ? 'checked' : ''} style="width:24px;height:24px"></label>
+          ${f('subscription_price', 'سعر الاشتراك الشهري')}${f('bankak_account', 'رقم حساب بنكك', 'text')}${f('bankak_name', 'اسم صاحب الحساب', 'text')}</div>
+        <button class="btn" id="saveSt">حفظ الإعدادات</button>`;
+      $('#saveSt').onclick = async () => {
+        const v = (k) => $('#s_' + k).value.trim();
+        const patch = { base_fare: +v('base_fare') || 0, per_km: +v('per_km') || 0, subscription_price: +v('subscription_price') || 0, bankak_account: v('bankak_account'), bankak_name: v('bankak_name'), require_subscription: $('#s_req').checked };
+        const ok = await safe(async () => { const { error } = await sb.from('app_settings').update(patch).eq('id', 1); if (error) throw error; return true; }, 'اتحفظت الإعدادات');
+        if (ok) Object.assign(S.settings, patch);
+      };
+    }
+  }
+});
 
 /* =====================================================
    Boot

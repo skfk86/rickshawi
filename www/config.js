@@ -6,8 +6,11 @@ window.RK_CONFIG = {
   EMAIL_DOMAIN: 'rickshawi.app',
   // مركز الخريطة الافتراضي (أم درمان)
   DEFAULT_CENTER: [15.6445, 32.4777],
-  TILES: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-  TILES_ATTR: '© OpenStreetMap © CARTO',
+  // خرائط مجانية بدون مفتاح: OpenStreetMap، ولو فشلت بنحوّل لـ Esri تلقائياً
+  TILES: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  TILES_ATTR: '© OpenStreetMap',
+  TILES_FALLBACK: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+  TILES_FALLBACK_ATTR: '© Esri, OpenStreetMap',
   SEARCH_RADIUS_M: 3000,
   DRIVER_LOCATION_INTERVAL_MS: 8000,
   SUPPORT_PHONE: '[رقم الدعم]'
