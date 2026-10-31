@@ -549,7 +549,7 @@ Screens.riderHome = () => {
       bindNav(root);
       map = makeMap($('#map'), lastPos || C.DEFAULT_CENTER);
       driverLayer.addTo(map);
-      onLeave(() => { map._dead = true; map.remove(); });
+      onLeave(() => { map._dead = true; try { map.stop(); map.off(); map.remove(); } catch (_) {} });
       const setPickup = async (p) => {
         pickup = p;
         if (!meMk) {
@@ -752,7 +752,7 @@ Screens.tracking = ({ id }) => {
       drv = await getDriverPublic(trip.driver_id);
       if (!$('#stTxt')) return;
       map = makeMap($('#map'), trip._pickup, 15);
-      onLeave(() => { map._dead = true; map.remove(); });
+      onLeave(() => { map._dead = true; try { map.stop(); map.off(); map.remove(); } catch (_) {} });
       L.marker(trip._pickup, { icon: meIcon() }).addTo(map);
       L.marker(trip._dropoff, { icon: destIcon() }).addTo(map);
       const rf = routeFollower(map);
@@ -1172,7 +1172,7 @@ Screens.driverHome = () => {
       if (S.driver?.status !== 'approved') { await setMode('rider'); return home(); }
       map = makeMap($('#map'), lastPos || C.DEFAULT_CENTER, 15);
       reqLayer.addTo(map);
-      onLeave(() => { map._dead = true; map.remove(); });
+      onLeave(() => { map._dead = true; try { map.stop(); map.off(); map.remove(); } catch (_) {} });
       const p = await getPos(); if (map._dead) return; map.setView(p, 15);
       meMk = L.marker(p, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map);
       sb.rpc('update_my_location', { lat: p[0], lng: p[1] }).then(() => {});
@@ -1292,7 +1292,7 @@ Screens.driverTrip = ({ id }) => {
       Loc.start(); // الراكب يتابعك
       if (!$('#stTxt')) return;
       map = makeMap($('#map'), trip._pickup, 15);
-      onLeave(() => { map._dead = true; map.remove(); });
+      onLeave(() => { map._dead = true; try { map.stop(); map.off(); map.remove(); } catch (_) {} });
       L.marker(trip._pickup, { icon: meIcon() }).addTo(map);
       L.marker(trip._dropoff, { icon: destIcon() }).addTo(map);
       const p = await getPos(); if (map._dead) return; meMk = L.marker(p, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map);
