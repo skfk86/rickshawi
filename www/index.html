@@ -74,6 +74,9 @@ a{color:var(--ink)}
 /* ما نخلي الأزرار والبطاقات تنضغط جوه القوائم الطويلة */
 .btn,.card,.field,.input,.doc,.list-btn,.route-box,.stat,.driver-item,.chip,.seg,.actions3,.empty,textarea{flex-shrink:0}
 .modal>*,.scroll>*{flex-shrink:0}
+/* داخل الصفوف الأفقية، الزر العريض يتقلّص عشان ما يطلع برة الشاشة */
+.row>.btn{flex-shrink:1;min-width:0}
+.row>.btn[style*="width:"]{flex-shrink:0}
 .sheet{transition:max-height .25s ease}
 .sheet.collapsed{max-height:120px!important;overflow:hidden}
 .grab-hit{border:none;background:none;padding:6px 40px 10px;margin:-6px auto -4px;display:flex;justify-content:center;cursor:grab;align-self:center}

@@ -1,5 +1,5 @@
 // اختبار شامل من البداية للنهاية: راكب + سواق في متصفحين، ضد Supabase الحقيقي
-// run 14 — بلاغات مختلفة للراكب والسواق
+// run 15
 // يشتغل في GitHub Actions (انظر .github/workflows/e2e.yml)
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -188,6 +188,10 @@ async function step(name, pages, fn) {
     await rp.waitForSelector('#send', { timeout: 25000 });
     await r2.waitForSelector('#send', { timeout: 25000 });
     await shot(rp, 'rider-rating'); await shot(r2, 'rider2-rating');
+  });
+  await step('no horizontal overflow on rating screen', both, async () => {
+    const over = await rp.evaluate(() => [...document.querySelectorAll('.btn')].filter(b => { const r = b.getBoundingClientRect(); return r.width && (r.left < -1 || r.right > innerWidth + 1); }).map(b => b.textContent.trim()));
+    if (over.length) throw new Error('overflowing: ' + over.join(' | '));
   });
   await step('both rate each other', both, async () => {
     await rp.waitForSelector('#send:not([disabled])');
