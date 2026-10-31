@@ -51,7 +51,7 @@ function haversineKm(a, b) {
 }
 const roadKm = (a, b) => Math.max(0.3, haversineKm(a, b) * 1.3);
 function suggestPrice(km) {
-  const st = S.settings || { base_fare: 1000, per_km: 350 };
+  const st = S.settings || { base_fare: 1800, per_km: 1100 };
   return Math.max(st.base_fare, Math.round((st.base_fare + st.per_km * km) / 100) * 100);
 }
 const etaMin = (m) => Math.max(1, Math.round((m / 1000) / 18 * 60)); // ~18 كم/س
@@ -513,7 +513,7 @@ Screens.riderHome = () => {
             <span class="btn ghost" style="width:96px;font-size:14px">${icon('payments', '', 'color:var(--green)')}كاش</span>
             <button class="btn" id="reqBtn" style="justify-content:space-between"><span>اطلب ركشة</span><span class="row gap4" style="color:var(--yellow)">${money(price)}${icon('arrow_back')}</span></button>
           </div>`;
-        const step = Math.max(100, Math.round((S.settings?.per_km || 350) / 100) * 100);
+        const step = Math.max(100, Math.round(suggestPrice(km) * 0.05 / 100) * 100);
         $('#minus').onclick = () => { price = Math.max(Math.round(suggestPrice(km) * 0.7 / 100) * 100, price - step); renderBottom(); };
         $('#plus').onclick = () => { price += step; renderBottom(); };
         $('#reqBtn').onclick = async (ev) => {
@@ -1093,8 +1093,8 @@ Screens.driverHome = () => {
   };
 };
 function openRequest(r) {
-  const inc = Math.max(100, Math.round((S.settings?.per_km || 350) / 100) * 100);
-  const counters = [r.offered_price + inc, r.offered_price + inc * 2, r.offered_price + inc * 4];
+  const r100 = (x) => Math.max(100, Math.round(x / 100) * 100);
+  const counters = [r.offered_price + r100(r.offered_price * 0.1), r.offered_price + r100(r.offered_price * 0.2), r.offered_price + r100(r.offered_price * 0.3)];
   let left = 20;
   modal(`<div class="row" style="justify-content:space-between">
       <div class="col gap4"><span class="row gap4 small" style="color:#B54708;font-weight:600">${icon('notifications_active', 'f', 'font-size:16px')}طلب جديد</span>
