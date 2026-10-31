@@ -899,6 +899,7 @@ Screens.tracking = ({ id }) => {
       updDriver(drv._loc);
       map.fitBounds(L.latLngBounds([trip._pickup, trip._dropoff].concat(drv._loc ? [drv._loc] : [])).pad(0.35), { paddingBottomRight: [0, 300] });
 
+      let sh = [];
       const render = async () => {
         if (!$('#stTxt')) return;
         $('#stTxt').textContent = STATUS_AR[trip.status];
@@ -920,8 +921,8 @@ Screens.tracking = ({ id }) => {
             <button class="act" id="shareBtn">${icon('shield_person')}شارك الرحلة</button>
           </div>
           ${trip.status === 'in_progress' ? meterHtml(trip, +trip.traveled_km || 0) : ''}
-          ${trip.is_shared ? sharesHtml(await loadShares(id)) : ''}
-          <div class="row gap8 card" style="background:#F4F6F5">${icon('flag', '', 'color:var(--ink3)')}<span class="grow" style="font-size:14px">${esc(trip.dropoff_address || 'الوجهة')}</span><b class="row gap4">${icon('payments', '', 'font-size:18px;color:var(--green)')}${money(trip.final_price || trip.offered_price)}</b></div>
+          ${trip.is_shared ? sharesHtml(sh = await loadShares(id)) : ''}
+          <div class="row gap8 card" style="background:#F4F6F5">${icon('flag', '', 'color:var(--ink3)')}<span class="grow" style="font-size:14px">${esc(trip.dropoff_address || 'الوجهة')}</span><b class="row gap4">${icon('payments', '', 'font-size:18px;color:var(--green)')}${money((trip.is_shared && (sh.find(x => x.rider_id === S.user.id) || {}).share) || trip.final_price || trip.offered_price)}</b></div>
           <div class="row gap8">${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon(trip.rider_id === S.user.id ? 'close' : 'logout')}${trip.rider_id === S.user.id ? 'إلغاء المشوار' : 'انسحاب'}</button>` : ''}
             <button class="btn danger" id="reportBtn" style="color:var(--ink3)">${icon('flag')}إبلاغ</button></div>`;
         $('#chatBtn').onclick = () => go('chat', { id });
