@@ -1,5 +1,5 @@
 // اختبار شامل من البداية للنهاية: راكب + سواق في متصفحين، ضد Supabase الحقيقي
-// run 10 — مع اختبار الطرحة
+// run 11 — بعد تحسين التصميم
 // يشتغل في GitHub Actions (انظر .github/workflows/e2e.yml)
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -123,6 +123,14 @@ async function step(name, pages, fn) {
     await dp.waitForFunction(() => /طرحة/.test(document.querySelector('#sheet')?.textContent || ''), null, { timeout: 15000 });
     await shot(r2, 'rider2-tracking'); await shot(dp, 'driver-trip-shared');
   });
+  await step('sheet collapses and expands', both, async () => {
+    const h1 = (await rp.locator('.sheet').boundingBox()).height;
+    await rp.click('.sheet .grab-hit'); await rp.waitForTimeout(500);
+    const h2 = (await rp.locator('.sheet').boundingBox()).height;
+    await shot(rp, 'rider-sheet-collapsed');
+    await rp.click('.sheet .grab-hit'); await rp.waitForTimeout(400);
+    if (!(h2 < h1 - 100)) throw new Error(`heights ${h1} → ${h2}`);
+  });
   await step('in-app route & ETA shown to driver', both, async () => {
     await dp.waitForFunction(() => /د/.test(document.querySelector('#navInfo')?.textContent || ''), null, { timeout: 20000 });
   });
@@ -174,6 +182,18 @@ async function step(name, pages, fn) {
     await rp.click('[data-nav="history"]');
     await rp.waitForSelector('.pill.green', { timeout: 15000 });
     await shot(rp, 'rider-history');
+  });
+  await step('report from history + shows in بلاغاتي', both, async () => {
+    await rp.locator('[data-rp]').first().click();
+    await rp.waitForSelector('[data-cat="route"]');
+    await rp.click('[data-cat="route"]'); await rp.fill('#rpD', 'اختبار بلاغ: لف بطريق طويل');
+    await shot(rp, 'rider-report-modal');
+    await rp.click('#rpSend');
+    await rp.waitForSelector('.overlay', { state: 'detached', timeout: 10000 });
+    await rp.click('[data-nav="account"]'); await rp.click('#myRpBtn');
+    await rp.waitForSelector('#rpList .card:has-text("طريق طويل")', { timeout: 10000 });
+    await shot(rp, 'rider-my-reports');
+    await rp.click('[data-back]');
   });
   await step('support chat', both, async () => {
     await rp.click('[data-nav="account"]');

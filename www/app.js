@@ -113,7 +113,7 @@ function haptic() { try { P.Haptics && P.Haptics.impact({ style: 'LIGHT' }); } c
 function modal(html, mount) {
   const o = document.createElement('div');
   o.className = 'overlay';
-  o.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
+  o.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button>${html}</div>`;
   const close = () => o.remove();
   o.addEventListener('click', (e) => { if (e.target === o) close(); });
   document.body.appendChild(o);
@@ -405,13 +405,15 @@ const Loc = {
 
 // تحريك العلامة بنعومة بدل القفز
 function animateMarker(mk, to, ms = 900) {
+  if (!mk || !mk._map || mk._map._dead) return;
   const from = mk.getLatLng(), t0 = performance.now();
   if (Math.abs(from.lat - to[0]) < 1e-7 && Math.abs(from.lng - to[1]) < 1e-7) return;
   if (haversineKm([from.lat, from.lng], to) > 1) return mk.setLatLng(to);
   const step = (t) => {
     const k = Math.min(1, (t - t0) / ms), e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    if (!mk._map || mk._map._dead) return;
     mk.setLatLng([from.lat + (to[0] - from.lat) * e, from.lng + (to[1] - from.lng) * e]);
-    if (k < 1 && mk._map) requestAnimationFrame(step);
+    if (k < 1 && mk._map && !mk._map._dead) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
 }
@@ -586,7 +588,7 @@ Screens.riderHome = () => {
         <button class="icon-btn float" id="recenter" aria-label="موقعي">${icon('my_location')}</button>
       </div>
       <div class="sheet" id="sheet">
-        <div class="grab"></div>
+        <button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button>
         <div class="route-box">
           <div class="route-dots"><span class="dot-a"></span><span class="dash"></span><span class="dot-b"></span></div>
           <div class="col grow gap8">
@@ -697,20 +699,24 @@ Screens.riderHome = () => {
               <button class="btn sm yellow" data-join="${i}" style="width:auto;padding:0 18px">انضم</button></div></div>`;
         }).join('');
         const shareEst = Math.round(price * (1 + pct()) / (seats + 1) * seats / 100) * 100;
-        b.innerHTML = `${near}
-          ${joinCards ? `<b style="font-size:15px">طرحات ماشية لنفس الاتجاه</b>${joinCards}<div class="row gap8 small muted" style="justify-content:center">— أو اطلب ركشة —</div>` : ''}
-          <div class="card col gap8" style="background:${shared ? 'var(--yellow-soft)' : '#F4F6F5'};padding:12px">
-            <label class="row gap8" style="cursor:pointer">${icon('group', shared ? 'f' : '', 'color:#7A5A00')}<span class="col grow"><b style="font-size:15px">طرحة — شارك الركشة</b><span class="small muted">ركاب تانيين ماشين نفس الاتجاه بينضموا وتقسموا المبلغ</span></span>
-              <input type="checkbox" id="shareTg" ${shared ? 'checked' : ''} style="width:24px;height:24px;accent-color:#0F1A14"></label>
-            ${shared ? `<div class="row" style="justify-content:space-between"><span class="small">إنتو كم شخص؟</span>
-              <div class="stepper"><button id="sMinus" aria-label="أقل">${icon('remove')}</button><b style="min-width:30px;text-align:center">${num(seats)}</b><button id="sPlus" aria-label="أكتر">${icon('add')}</button></div></div>
-              <span class="small">لو انضم ليكم راكب واحد بس، نصيبكم بينزل لحوالي <b>${money(shareEst)}</b></span>` : ''}
-          </div>
-          <div class="card row" style="background:#F4F6F5;justify-content:space-between">
-            <div class="col"><span class="small muted">${num(km.toFixed(1))} كم بالشوارع · حوالي ${num(routeMin)} دقيقة</span><span class="small muted">السواقين ممكن يقترحوا سعر تاني</span></div>
-            <div class="stepper"><button id="minus" aria-label="نقّص السعر">${icon('remove')}</button>
-              <b class="price" id="priceV" style="min-width:76px;text-align:center">${money(price)}</b>
-              <button id="plus" aria-label="زيد السعر">${icon('add')}</button></div>
+        const avail = drivers.length
+          ? `<span class="pill green">${icon('electric_rickshaw', 'f', 'font-size:14px')}${num(drivers.length)} متاحة · ${num(etaMin(drivers[0].distance_m))} د</span>`
+          : `<span class="pill yellow">${icon('schedule', '', 'font-size:14px')}ما في ركشة قريبة هسع</span>`;
+        b.innerHTML = `
+          ${joinCards ? `<div class="col gap8"><b style="font-size:15px">طرحات ماشية لنفس الاتجاه</b>${joinCards}</div>` : ''}
+          <div class="card col gap12" style="background:#F4F6F5;padding:14px">
+            <div class="row" style="justify-content:space-between"><span class="small muted row gap4">${icon('route', '', 'font-size:16px')}${num(km.toFixed(1))} كم · ${num(routeMin)} د</span>${avail}</div>
+            <div class="row" style="justify-content:space-between">
+              <div class="col"><span class="small muted">عرضك</span><b class="price" id="priceV" style="font-size:24px">${money(price)}</b></div>
+              <div class="stepper"><button id="minus" aria-label="نقّص السعر">${icon('remove')}</button><button id="plus" aria-label="زيد السعر">${icon('add')}</button></div>
+            </div>
+            <div style="height:1px;background:var(--line)"></div>
+            <label class="row gap8" style="cursor:pointer">
+              <span class="rk" style="width:40px;height:40px;border-radius:12px;background:${shared ? 'var(--yellow)' : '#fff'}">${icon('group', shared ? 'f' : '', 'font-size:22px')}</span>
+              <span class="col grow"><b style="font-size:15px">طرحة</b><span class="small muted">${shared ? `إنتو ${num(seats)} · نصيبكم حوالي ${money(shareEst)} لو انضم زول` : 'شارك الركشة وقسّم المبلغ'}</span></span>
+              <input type="checkbox" class="switch" id="shareTg" ${shared ? 'checked' : ''} aria-label="طرحة"></label>
+            ${shared ? `<div class="row" style="justify-content:space-between"><span class="small">عددكم</span>
+              <div class="stepper"><button id="sMinus" aria-label="أقل">${icon('remove')}</button><b style="min-width:30px;text-align:center">${num(seats)}</b><button id="sPlus" aria-label="أكتر">${icon('add')}</button></div></div>` : ''}
           </div>
           <div class="row gap8">
             <span class="btn ghost" style="width:96px;font-size:14px">${icon('payments', '', 'color:var(--green)')}كاش</span>
@@ -758,7 +764,9 @@ Screens.waiting = ({ id }) => ({
         <div class="pulse">${icon('electric_rickshaw', 'f', 'font-size:42px')}</div>
         <h2 class="h1" style="font-size:22px;margin-top:20px">بنرسل طلبك للركشات القريبة</h2>
         <p class="muted" style="margin:0" id="tripInfo">…</p>
+        <div class="row gap4 small muted" id="wTimer">${icon('timer', '', 'font-size:16px')}<span>0:00</span></div>
       </div>
+      <div class="route-box" id="wRoute" style="display:none"></div>
       <div id="wShares"></div>
       <div class="row" style="justify-content:space-between" id="offHead"><b>عروض السواقين</b><span class="small muted" id="offCount"></span></div>
       <div id="offers" class="col gap8"><div class="empty" style="padding:20px">${icon('hourglass_top')}<span>العروض بتظهر هنا أول ما سواق يرد</span></div></div>
@@ -770,6 +778,10 @@ Screens.waiting = ({ id }) => ({
     if (!trip) return home();
     if (trip.status !== 'requested') return routeToActive();
     const owner = trip.rider_id === S.user.id;
+    const wr = $('#wRoute'); wr.style.display = 'flex';
+    wr.innerHTML = `<div class="route-dots"><span class="dot-a"></span><span class="dash"></span><span class="dot-b"></span></div>
+      <div class="col grow gap8"><span class="small muted">${esc(trip.pickup_address || '')}</span><b style="font-size:15px">${esc(trip.dropoff_address || '')}</b></div>
+      <div class="col" style="align-items:flex-start;justify-content:center"><span class="small muted">${num((+trip.distance_km || 0).toFixed(1))} كم</span><b>${money(trip.offered_price)}</b></div>`;
     $('#tripInfo').textContent = `${trip.dropoff_address || 'وجهتك'} · ${owner ? 'عرضك ' + money(trip.offered_price) : 'طرحة'}`;
     const paintShares = async () => { if (!trip.is_shared) return; const sh = await loadShares(id); if ($('#wShares')) $('#wShares').innerHTML = sharesHtml(sh); };
     paintShares();
@@ -825,6 +837,7 @@ Screens.waiting = ({ id }) => ({
       home();
     }, Math.max(1000, 15 * 60000 - (Date.now() - new Date(trip.created_at))));
     onLeave(() => clearTimeout(expire));
+    every(1000, () => { const t = Math.floor((Date.now() - new Date(trip.created_at)) / 1000); const el = $('#wTimer span'); if (el) el.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; });
     $('#cancel').onclick = async () => {
       if (!(await confirmBox('تلغي الطلب؟', 'السواقين ما حيشوفوا طلبك تاني.', 'إلغاء الطلب', true))) return;
       const ok = await safe(() => rpc('set_trip_status', { p_trip: id, p_status: 'cancelled', p_reason: 'rider_cancel' }));
@@ -851,7 +864,7 @@ function sharesHtml(shares, opts = {}) {
         ${opts.driver ? `<span class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${icon('trip_origin', '', 'font-size:12px;color:var(--blue)')} ${esc(x.pickup_address || '')} ← ${esc(x.dropoff_address || '')}</span>` : ''}</span>
       ${opts.driver && x.phone ? `<a class="icon-btn" href="tel:${esc(x.phone)}" aria-label="اتصال" style="width:34px;height:34px;background:#fff">${icon('call', '', 'font-size:18px')}</a>` : ''}
       <b>${money(x.share)}</b></div>`).join('')}
-    <span class="small muted">كل مجموعة إضافية بتزيد الإجمالي ${num(S.settings?.shared_extra_pct ?? 25)}٪ للسواق، والمبلغ بيتقسم على عدد الركاب</span>
+    <span class="small muted">${icon('info', '', 'font-size:13px')} المبلغ بيتقسم على عدد الركاب</span>
   </div>`;
 }
 
@@ -873,7 +886,7 @@ Screens.tracking = ({ id }) => {
           <span class="row gap8" style="font-size:14px">${icon('near_me', '', 'font-size:20px;color:var(--yellow)')}<span id="stTxt">…</span></span>
           <b id="eta" style="color:var(--yellow);font-size:17px"></b></div>
       </div>
-      <div class="sheet" id="sheet"><div class="grab"></div><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
+      <div class="sheet" id="sheet"><button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
     </div>`,
     async mount() {
       trip = await safe(() => getTrip(id));
@@ -906,7 +919,7 @@ Screens.tracking = ({ id }) => {
         const idx = STEP_IDX[trip.status] || 1;
         const unread = await unreadCount(id);
         if (!$('#sheet')) return;
-        $('#sheet').innerHTML = `<div class="grab"></div>
+        $('#sheet').innerHTML = `<button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button>
           <div class="col gap8"><div class="progress">${[1, 2, 3, 4].map(i => `<i class="${i <= idx ? 'on' : ''}"></i>`).join('')}</div>
             <div class="row small muted" style="justify-content:space-between"><span>تم القبول</span><span>في الطريق</span><span>وصل</span><span>المشوار</span></div></div>
           <div class="row gap12">
@@ -1326,7 +1339,7 @@ Screens.driverHome = () => {
         <button id="onlineBtn" aria-pressed="false" style="display:flex;align-items:center;gap:10px;border:none;border-radius:999px;padding:6px 6px 6px 16px;font-size:14px;font-weight:600;color:#fff;background:#5B6660;box-shadow:0 4px 16px rgba(15,26,20,.18)"><span id="onLbl">غير متاح</span><span style="width:36px;height:36px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center">${icon('power_settings_new', '', 'font-size:20px;color:#5B6660')}</span></button>
       </div>
       <button class="icon-btn float" id="dRecenter" aria-label="موقعي" style="position:absolute;right:16px;bottom:calc(36% + 16px);z-index:500;border-radius:50%;width:48px;height:48px">${icon('my_location')}</button>
-      <div class="sheet" id="dSheet" style="max-height:36%"><div class="grab"></div>
+      <div class="sheet" id="dSheet" style="max-height:36%"><button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button>
         <div class="row" style="justify-content:space-between"><h2 style="margin:0;font-size:18px">طلبات قريبة</h2><span class="small muted row gap4" id="reqCount"></span></div>
         <div id="reqs" class="col gap8"></div></div>
       </div>${nav('driverHome')}`,
@@ -1461,7 +1474,7 @@ Screens.driverTrip = ({ id }) => {
     html: `<div class="screen">
       <div id="map" class="map"></div>
       <div class="map-top"><div class="loc-box" style="background:var(--ink);color:#fff"><span class="row gap8" style="font-size:14px">${icon('electric_rickshaw', 'f', 'font-size:20px;color:var(--yellow)')}<span id="stTxt">…</span></span></div></div>
-      <div class="sheet" id="sheet"><div class="grab"></div><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
+      <div class="sheet" id="sheet"><button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
     </div>`,
     async mount() {
       trip = await safe(() => getTrip(id));
@@ -1514,7 +1527,7 @@ Screens.driverTrip = ({ id }) => {
         const target = trip.status === 'in_progress' ? trip._dropoff : trip._pickup;
         const unread = await unreadCount(id);
         if (!$('#sheet')) return;
-        $('#sheet').innerHTML = `<div class="grab"></div>
+        $('#sheet').innerHTML = `<button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button>
           <div class="row gap12"><div class="avatar grey" style="width:54px;height:54px;border-radius:16px">${rider.avatar_url ? `<img src="${esc(rider.avatar_url)}" alt="">` : initial(rider.full_name)}</div>
             <div class="col grow gap4"><b style="font-size:17px">${esc(rider.full_name || 'الراكب')}</b><span class="small muted row gap4">${icon('star', 'f', 'font-size:14px;color:var(--star)')}${num(rider.rating_avg || 5)}</span></div>
             <b class="price" style="font-size:22px">${trip.is_shared && shares[0] ? money(shares[0].total) : money(trip.final_price)}</b></div>
@@ -2038,6 +2051,11 @@ sb.auth.onAuthStateChange((ev) => {
   if (ev === 'SIGNED_OUT') { S.user = null; Loc.stop(); }
 });
 
+// اسحب/دوس على المقبض عشان تصغّر أو تكبّر اللوحة وتشوف الخريطة
+document.addEventListener('click', (e) => {
+  const g = e.target.closest('.grab-hit'); if (!g) return;
+  const sh = g.closest('.sheet'); if (sh) { sh.classList.toggle('collapsed'); haptic(); }
+});
 // كل النماذج بتتعالج بالجافاسكربت — ما نخلي أي نموذج يعيد تحميل التطبيق
 document.addEventListener('submit', (e) => e.preventDefault(), true);
 go('splash');
