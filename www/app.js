@@ -241,6 +241,11 @@ const rkIcon = (label) => L.divIcon({
 });
 const meIcon = () => L.divIcon({ className: '', iconSize: [20, 20], iconAnchor: [10, 10], html: '<div class="mk-me"></div>' });
 const destIcon = () => L.divIcon({ className: '', iconSize: [16, 16], iconAnchor: [8, 8], html: '<div class="mk-dest"></div>' });
+// دبابيس بعنوان: الاستلام (أزرق) والوجهة (أسود)
+const pinIcon = (label, kind = 'pick') => L.divIcon({ className: '', iconSize: [10, 10], iconAnchor: [0, 46],
+  html: `<div class="pin ${kind}"><span class="pin-lbl">${icon(kind === 'pick' ? 'person_pin_circle' : 'flag', 'f', 'font-size:15px')}${label}</span><i class="pin-stem"></i><i class="pin-dot"></i></div>` });
+const vehicleIcon = () => L.divIcon({ className: '', iconSize: [52, 52], iconAnchor: [26, 26],
+  html: `<div class="veh"><i class="veh-halo"></i><div class="mk-rk" style="width:42px;height:42px">${icon('electric_rickshaw', 'f', 'font-size:24px')}</div></div>` });
 
 /* ---------- Router ---------- */
 const subs = [];      // realtime channels للشاشة الحالية
@@ -427,7 +432,8 @@ const priceIcon = (label, shared) => L.divIcon({
 
 /* ---------- رسم المسار لحظياً ---------- */
 function routeFollower(map) {
-  const line = L.polyline([], { color: '#0F1A14', weight: 5, opacity: .85 }).addTo(map);
+  const casing = L.polyline([], { color: '#FFFFFF', weight: 10, opacity: 1, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+  const line = L.polyline([], { color: '#0F1A14', weight: 5, opacity: .95, lineCap: 'round', lineJoin: 'round' }).addTo(map);
   let lastFrom = null, lastTo = null, info = null;
   return {
     async update(from, to) {
@@ -437,7 +443,7 @@ function routeFollower(map) {
       lastFrom = from; lastTo = to;
       info = await getRoute(from, to);
       if (map._dead) return info;
-      line.setLatLngs(info.coords);
+      line.setLatLngs(info.coords); casing.setLatLngs(info.coords);
       return info;
     },
     get info() { return info; }
@@ -982,11 +988,15 @@ Screens.tracking = ({ id }) => {
   return {
     html: `<div class="screen">
       <div id="map" class="map"></div>
-      <div class="map-top">
-        <div class="loc-box" style="background:var(--ink);color:#fff;justify-content:space-between">
-          <span class="row gap8" style="font-size:14px">${icon('near_me', '', 'font-size:20px;color:var(--yellow)')}<span id="stTxt">…</span></span>
-          <b id="eta" style="color:var(--yellow);font-size:17px"></b></div>
+      <div class="trk-top" id="trkTop">
+        <div class="row gap12">
+          <div class="col grow gap4" style="min-width:0"><span class="small" id="stTxt" style="color:#C2CCC6">…</span>
+            <b id="eta" class="trk-eta">…</b><span class="small" id="etaSub" style="color:#C2CCC6"></span></div>
+          <div class="trk-ico" id="trkIco">${icon('electric_rickshaw', 'f', 'font-size:30px')}</div>
+        </div>
+        <div class="trk-steps" id="trkSteps"></div>
       </div>
+      <button class="icon-btn float" id="tRecenter" aria-label="تكبير على الركشة" style="position:absolute;right:16px;bottom:calc(46% + 12px);z-index:500;border-radius:50%;width:48px;height:48px">${icon('my_location')}</button>
       <div class="sheet" id="sheet"><button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
     </div>`,
     async mount() {
@@ -999,30 +1009,44 @@ Screens.tracking = ({ id }) => {
       if (!$('#stTxt')) return;
       map = makeMap($('#map'), trip._pickup, 15);
       onLeave(() => { map._dead = true; try { map.stop(); map.off(); map.remove(); } catch (_) {} });
-      L.marker(trip._pickup, { icon: meIcon() }).addTo(map);
-      L.marker(trip._dropoff, { icon: destIcon() }).addTo(map);
+      const pickMk = L.marker(trip._pickup, { icon: pinIcon('إنت هنا', 'pick') }).addTo(map);
+      L.marker(trip._dropoff, { icon: pinIcon('الوجهة', 'drop') }).addTo(map);
       const rf = routeFollower(map);
+      const paintTop = (r) => {
+        if (!$('#eta')) return;
+        const st = trip.status, at = (m) => new Date(Date.now() + m * 60000).toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' });
+        const T = {
+          accepted: ['السواق قبل طلبك', r ? `${num(r.min)} دقيقة` : '…', r ? `${num(r.km.toFixed(1))} كم · الركشة جاية ليك` : ''],
+          arriving: ['الركشة جاية ليك', r ? `${num(r.min)} دقيقة` : '…', r ? `${num(r.km.toFixed(1))} كم · اتجهز` : ''],
+          arrived: ['الركشة وصلت', 'قدامك هسع', drv.plate_number ? `اتأكد من اللوحة ${drv.plate_number}` : 'السواق منتظرك'],
+          in_progress: ['في الطريق لوجهتك', r ? `${num(r.min)} دقيقة` : '…', r ? `الوصول حوالي ${at(r.min)} · ${num(r.km.toFixed(1))} كم` : '']
+        }[st] || [STATUS_AR[st], '', ''];
+        $('#stTxt').textContent = T[0]; $('#eta').textContent = T[1]; $('#etaSub').textContent = T[2];
+        $('#trkTop').classList.toggle('arrived', st === 'arrived');
+        const idx = STEP_IDX[st] || 1;
+        $('#trkSteps').innerHTML = ['قبول', 'في الطريق', 'وصل', 'المشوار'].map((l, i) => `<div class="${i + 1 < idx ? 'done' : i + 1 === idx ? 'now' : ''}"><i></i><span>${l}</span></div>`).join('');
+        pickMk.setOpacity(st === 'in_progress' ? .35 : 1);
+      };
       const updDriver = async (loc) => {
         if (!loc || map._dead) return;
         drv._loc = loc;
-        if (!drvMk) drvMk = L.marker(loc, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map); else animateMarker(drvMk, loc);
+        if (!drvMk) drvMk = L.marker(loc, { icon: vehicleIcon(), zIndexOffset: 1000 }).addTo(map); else animateMarker(drvMk, loc);
         const target = trip.status === 'in_progress' ? trip._dropoff : trip._pickup;
         const r = await rf.update(loc, target);
-        if (r && $('#eta')) $('#eta').textContent = trip.status === 'arrived' ? '' : `${num(r.min)} د · ${num(r.km.toFixed(1))} كم`;
+        paintTop(r || rf.info);
       };
+      paintTop(null);
+      $('#tRecenter').onclick = () => { const pts = [drv._loc, trip.status === 'in_progress' ? trip._dropoff : trip._pickup].filter(Boolean); map.fitBounds(L.latLngBounds(pts).pad(0.4), { paddingTopLeft: [0, 160], paddingBottomRight: [0, 320] }); };
       updDriver(drv._loc);
-      map.fitBounds(L.latLngBounds([trip._pickup, trip._dropoff].concat(drv._loc ? [drv._loc] : [])).pad(0.35), { paddingBottomRight: [0, 300] });
+      map.fitBounds(L.latLngBounds([trip._pickup, trip._dropoff].concat(drv._loc ? [drv._loc] : [])).pad(0.35), { paddingTopLeft: [0, 160], paddingBottomRight: [0, 320] });
 
       let sh = [];
       const render = async () => {
         if (!$('#stTxt')) return;
-        $('#stTxt').textContent = STATUS_AR[trip.status];
-        const idx = STEP_IDX[trip.status] || 1;
+        paintTop(rf.info);
         const unread = await unreadCount(id);
         if (!$('#sheet')) return;
         $('#sheet').innerHTML = `<button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button>
-          <div class="col gap8"><div class="progress">${[1, 2, 3, 4].map(i => `<i class="${i <= idx ? 'on' : ''}"></i>`).join('')}</div>
-            <div class="row small muted" style="justify-content:space-between"><span>تم القبول</span><span>في الطريق</span><span>وصل</span><span>المشوار</span></div></div>
           <div class="row gap12">
             <div style="position:relative"><div class="avatar" style="width:58px;height:58px;border-radius:18px;font-size:22px">${drv.avatar_url ? `<img src="${esc(drv.avatar_url)}" alt="">` : initial(drv.full_name)}</div>
               <span style="position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;border-radius:999px;padding:1px 6px;font-size:11px;display:flex;align-items:center;gap:2px">${icon('star', 'f', 'font-size:12px;color:var(--yellow)')}${num(drv.rating_avg || 5)}</span></div>
@@ -1526,11 +1550,11 @@ Screens.driverHome = () => {
         reqLayer.clearLayers();
         reqs.forEach((r, i) => L.marker([r.pickup_lat, r.pickup_lng], { icon: priceIcon(money(r.offered_price), r.is_shared) })
           .on('click', () => openRequest(reqs[i])).addTo(reqLayer));
-        box.innerHTML = reqs.length ? reqs.map((r, i) => `<button class="driver-item" data-r="${i}" style="flex-direction:column;align-items:stretch;gap:8px">
+        box.innerHTML = reqs.length ? reqs.map((r, i) => `<button class="driver-item req-card${r.is_preferred ? ' pref' : ''}" data-r="${i}" style="flex-direction:column;align-items:stretch;gap:8px">
           <span class="row gap8"><span class="avatar grey" style="width:40px;height:40px">${initial(r.rider_name)}</span>
             <span class="col grow"><b style="font-size:15px">${esc(r.rider_name || 'راكب')}${r.is_preferred ? ` <span class="pill" style="background:var(--red-soft);color:#B4134A">${icon('favorite', 'f', 'font-size:13px')}طلبك إنت</span>` : ''}${r.is_shared ? ` <span class="pill yellow">${icon('group', '', 'font-size:13px')}طرحة · ${num(r.riders)}</span>` : ''}</b>
               <span class="small muted row gap4">${icon('star', 'f', 'font-size:14px;color:var(--star)')}${num(r.rider_rating || 5)} · على بعد ${distStr(r.away_m)}</span></span>
-            <span class="price">${money(r.offered_price)}</span></span>
+            <span class="col" style="align-items:flex-end"><span class="price" style="font-size:19px">${money(r.offered_price)}</span><span class="small muted">${num((+r.distance_km).toFixed(1))} كم</span></span></span>
           <span class="row small muted gap4">${icon('trip_origin', '', 'font-size:16px;color:var(--blue)')}<span class="grow" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.pickup_address || '')}</span></span>
           <span class="row small muted gap4">${icon('flag', '', 'font-size:16px')}<span class="grow" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.dropoff_address || '')} · ${num((+r.distance_km).toFixed(1))} كم</span></span>
         </button>`).join('') : `<div class="row gap12 card" style="background:#F4F6F5">${icon('radar', '', 'color:var(--green);font-size:28px')}<div class="col"><b>بندوّر ليك على طلبات…</b><span class="small muted">أول ما راكب قريب يطلب بنوريك</span></div></div>`;
@@ -1557,6 +1581,7 @@ function openRequest(r) {
     <div class="card row gap12" style="background:#F4F6F5"><span class="avatar grey">${initial(r.rider_name)}</span>
       <div class="col grow"><b>${esc(r.rider_name || 'راكب')}</b><span class="small muted row gap4">${icon('star', 'f', 'font-size:14px;color:var(--star)')}${num(r.rider_rating || 5)}</span></div>
       <span class="small muted row gap4">${icon('near_me', '', 'font-size:18px')}${distStr(r.away_m)}</span></div>
+    <div id="reqMap" style="height:150px;border-radius:18px;overflow:hidden;flex-shrink:0;background:#E9EEEB"></div>
     <div class="route-box" style="background:transparent;padding:0 4px"><div class="route-dots"><span class="dot-a"></span><span class="dash"></span><span class="dot-b"></span></div>
       <div class="col grow gap12"><div class="col"><span class="small muted">الاستلام</span><b style="font-size:15px">${esc(r.pickup_address || '')}</b></div>
       <div class="col"><span class="small muted">الوجهة</span><b style="font-size:15px">${esc(r.dropoff_address || '')}</b></div></div></div>
@@ -1566,6 +1591,17 @@ function openRequest(r) {
     <div class="row gap8"><button class="btn ghost" id="rej" aria-label="تجاهل" style="width:64px;background:var(--red-soft);color:var(--red);border-color:#F3C7C3">${icon('close')}</button>
       <button class="btn" id="acc">${icon('check_circle', '', 'color:var(--yellow)')}قبول · ${money(r.offered_price)}</button></div>`,
   (o, close) => {
+    setTimeout(async () => {
+      const el = $('#reqMap', o); if (!el) return;
+      const m = L.map(el, { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false });
+      L.tileLayer(C.TILES, { maxZoom: 19 }).addTo(m);
+      const a = [r.pickup_lat, r.pickup_lng], b = S.lastPos || (await getPos().catch(() => null));
+      if (!b) { m.setView(a, 16); L.marker(a, { icon: pinIcon('الراكب', 'pick') }).addTo(m); return; }
+      L.marker(a, { icon: pinIcon('الراكب', 'pick') }).addTo(m); L.marker(b, { icon: vehicleIcon() }).addTo(m);
+      m.fitBounds(L.latLngBounds([a, b]).pad(0.35), { paddingTopLeft: [0, 40] });
+      try { const rt = await getRoute(a, b); if (rt && document.body.contains(el)) { L.polyline(rt.coords, { color: '#fff', weight: 8 }).addTo(m); L.polyline(rt.coords, { color: '#0F1A14', weight: 4 }).addTo(m); } } catch (_) {}
+      const obs = new MutationObserver(() => { if (!document.body.contains(el)) { obs.disconnect(); m._dead = true; m.remove(); } }); obs.observe(document.body, { childList: true, subtree: true });
+    }, 60);
     const tick = setInterval(() => {
       left--; if (!document.body.contains(o)) return clearInterval(tick);
       $('#tmV', o).textContent = num(left);
@@ -1598,7 +1634,16 @@ Screens.driverTrip = ({ id }) => {
   return {
     html: `<div class="screen">
       <div id="map" class="map"></div>
-      <div class="map-top"><div class="loc-box" style="background:var(--ink);color:#fff"><span class="row gap8" style="font-size:14px">${icon('electric_rickshaw', 'f', 'font-size:20px;color:var(--yellow)')}<span id="stTxt">…</span></span></div></div>
+      <div class="trk-top nav" id="navTop">
+        <div class="row gap12">
+          <div class="trk-ico" id="navIco" style="background:var(--yellow);color:var(--ink)">${icon('navigation', 'f', 'font-size:28px')}</div>
+          <div class="col grow gap4" style="min-width:0"><span class="small" id="stTxt" style="color:#C2CCC6">…</span>
+            <div id="navInfo" class="row gap8" style="align-items:baseline"><b class="trk-eta">…</b></div>
+            <span class="small" id="navAddr" style="color:#E6ECE8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span></div>
+          <a class="icon-btn" id="gmaps" aria-label="افتح في خرائط جوجل" style="background:rgba(255,255,255,.1);color:#fff">${icon('map')}</a>
+        </div>
+      </div>
+      <button class="icon-btn float" id="recenter" aria-label="تتبع موقعي" style="position:absolute;right:16px;bottom:calc(46% + 12px);z-index:500;border-radius:50%;width:48px;height:48px">${icon('my_location')}</button>
       <div class="sheet" id="sheet"><button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
     </div>`,
     async mount() {
@@ -1611,9 +1656,9 @@ Screens.driverTrip = ({ id }) => {
       if (!$('#stTxt')) return;
       map = makeMap($('#map'), trip._pickup, 15);
       onLeave(() => { map._dead = true; try { map.stop(); map.off(); map.remove(); } catch (_) {} });
-      L.marker(trip._pickup, { icon: meIcon() }).addTo(map);
-      L.marker(trip._dropoff, { icon: destIcon() }).addTo(map);
-      const p = await getPos(); if (map._dead) return; meMk = L.marker(p, { icon: rkIcon(), zIndexOffset: 1000 }).addTo(map);
+      const dPick = L.marker(trip._pickup, { icon: pinIcon(esc((rider.full_name || 'الراكب').split(' ')[0]), 'pick') }).addTo(map);
+      L.marker(trip._dropoff, { icon: pinIcon('الوجهة', 'drop') }).addTo(map);
+      const p = await getPos(); if (map._dead) return; meMk = L.marker(p, { icon: vehicleIcon(), zIndexOffset: 1000 }).addTo(map);
       const rf = routeFollower(map);
       paxLayer = L.layerGroup().addTo(map);
       const paintPax = async () => {
@@ -1633,12 +1678,27 @@ Screens.driverTrip = ({ id }) => {
         animateMarker(meMk, lastPos);
         const target = trip.status === 'in_progress' ? trip._dropoff : trip._pickup;
         const r = await rf.update(lastPos, target);
-        if (r && $('#navInfo')) $('#navInfo').innerHTML = `<b style="font-size:20px">${num(r.min)} د</b><span class="small muted">${num(r.km.toFixed(1))} كم ${trip.status === 'in_progress' ? 'للوجهة' : 'للراكب'}</span>`;
+        paintNav(r || rf.info);
         if (follow && !map._dead) map.panTo(lastPos, { animate: true });
       };
+      function paintNav(r) {
+        if (!$('#navTop')) return;
+        const going = trip.status === 'in_progress', st = trip.status;
+        const tgt = going ? trip._dropoff : trip._pickup;
+        $('#stTxt').textContent = st === 'arrived' ? 'إنت في مكان الاستلام' : going ? 'توصيل للوجهة' : 'استلام الراكب';
+        $('#navInfo').innerHTML = st === 'arrived'
+          ? `<b class="trk-eta">منتظر الراكب</b>`
+          : `<b class="trk-eta">${r ? num(r.min) + ' د' : '…'}</b><span style="font-size:16px;color:#E6ECE8">${r ? num(r.km.toFixed(1)) + ' كم' : ''}</span>`;
+        $('#navAddr').textContent = going ? (trip.dropoff_address || '') : (trip.pickup_address || '');
+        $('#navIco').innerHTML = icon(st === 'arrived' ? 'hail' : going ? 'flag' : 'navigation', 'f', 'font-size:28px');
+        $('#navTop').classList.toggle('arrived', st === 'arrived');
+        $('#gmaps').href = `https://www.google.com/maps/dir/?api=1&destination=${tgt[0]},${tgt[1]}&travelmode=driving`;
+        dPick.setOpacity(going ? .35 : 1);
+      }
       const first = await rf.update(p, trip.status === 'in_progress' ? trip._dropoff : trip._pickup);
       if (map._dead) return;
-      map.fitBounds(L.polyline(first.coords).getBounds().pad(0.3), { paddingBottomRight: [0, 340] });
+      paintNav(first);
+      map.fitBounds(L.polyline(first.coords).getBounds().pad(0.3), { paddingTopLeft: [0, 150], paddingBottomRight: [0, 340] });
       every(5000, refreshRoute);
       const onMeter = (e) => { if ($('#mKm')) { $('#mKm').textContent = num(e.detail.toFixed(2)); $('#mFare').textContent = money(fareFor(e.detail)); } };
       document.addEventListener('rk-meter', onMeter);
@@ -1647,7 +1707,7 @@ Screens.driverTrip = ({ id }) => {
 
       const render = async () => {
         if (!$('#stTxt')) return;
-        $('#stTxt').textContent = STATUS_AR[trip.status];
+        paintNav(rf.info);
         const nx = NEXT[trip.status];
         const target = trip.status === 'in_progress' ? trip._dropoff : trip._pickup;
         const unread = await unreadCount(id);
@@ -1656,19 +1716,13 @@ Screens.driverTrip = ({ id }) => {
           <div class="row gap12"><div class="avatar grey" style="width:54px;height:54px;border-radius:16px">${rider.avatar_url ? `<img src="${esc(rider.avatar_url)}" alt="">` : initial(rider.full_name)}</div>
             <div class="col grow gap4"><b style="font-size:17px">${esc(rider.full_name || 'الراكب')}</b><span class="small muted row gap4">${icon('star', 'f', 'font-size:14px;color:var(--star)')}${num(rider.rating_avg || 5)}</span></div>
             <b class="price" style="font-size:22px">${trip.is_shared && shares[0] ? money(shares[0].total) : money(trip.final_price)}</b></div>
-          <div class="route-box"><div class="route-dots"><span class="dot-a"></span><span class="dash"></span><span class="dot-b"></span></div>
-            <div class="col grow gap8"><span style="font-size:14px;${trip.status === 'in_progress' ? 'color:var(--ink3)' : 'font-weight:600'}">${esc(trip.pickup_address || '')}</span>
-            <span style="font-size:14px;${trip.status === 'in_progress' ? 'font-weight:600' : 'color:var(--ink3)'}">${esc(trip.dropoff_address || '')}</span></div></div>
-          <div class="card row gap12" style="background:#F4F6F5;padding:10px 14px">${icon('navigation', 'f', 'color:var(--blue)')}<div class="col grow" id="navInfo"><span class="small muted">بنحسب الطريق…</span></div>
-            <button class="icon-btn" id="recenter" aria-label="تتبع موقعي" style="background:#fff">${icon('my_location')}</button></div>
+          ${nx ? `<button class="btn ${trip.status === 'in_progress' ? 'yellow' : ''}" id="nextBtn" style="height:64px;font-size:17px;border-radius:20px">${icon(nx[1])}${nx[2]}</button>` : ''}
           ${trip.status === 'in_progress' ? meterHtml(trip, Meter.km || +trip.traveled_km || 0) : ''}
           ${trip.is_shared ? sharesHtml(shares = await loadShares(id), { driver: true }) : ''}
-          <div class="actions3">
-            <a class="act" href="https://www.google.com/maps/dir/?api=1&destination=${target[0]},${target[1]}&travelmode=driving">${icon('map')}خرائط جوجل</a>
-            <button class="act dark" id="chatBtn">${icon('chat')}دردشة${unread ? `<span class="badge">${num(unread)}</span>` : ''}</button>
-            <a class="act" href="tel:${esc(rider.phone || '')}">${icon('call')}اتصال</a>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+            <button class="act dark" id="chatBtn" style="height:56px;flex-direction:row;gap:8px">${icon('chat')}دردشة${unread ? `<span class="badge">${num(unread)}</span>` : ''}</button>
+            <a class="act" href="tel:${esc(rider.phone || '')}" style="height:56px;flex-direction:row;gap:8px">${icon('call')}اتصال</a>
           </div>
-          ${nx ? `<button class="btn ${trip.status === 'in_progress' ? 'yellow' : ''}" id="nextBtn" style="height:60px">${icon(nx[1])}${nx[2]}</button>` : ''}
           ${trip.status === 'arrived' ? `<button class="btn ghost" id="noShowBtn">${icon('person_off')}الراكب ما حضر</button>` : ''}
           <div class="row gap8">${trip.status !== 'in_progress' ? `<button class="btn danger" id="cancelBtn">${icon('close')}إلغاء المشوار</button>` : ''}
             <button class="btn danger" id="reportBtn" style="color:var(--ink3)">${icon('report')}مشكلة مع الراكب</button></div>`;
