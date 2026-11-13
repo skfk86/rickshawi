@@ -539,9 +539,9 @@ Screens.auth = ({ tab = 'login' } = {}) => ({
       </div>
       ${tab === 'signup' ? `<div class="field"><label for="fname">اسمك</label><input class="input" id="fname" autocomplete="name" placeholder="الاسم الأول والأخير" required></div>` : ''}
       <div class="field"><label for="phone">رقم الموبايل</label>
-        <div class="row gap8" style="direction:ltr">
-          <span class="input" style="width:auto;display:flex;align-items:center;font-weight:600;flex-shrink:0">+249</span>
-          <input class="input" id="phone" inputmode="tel" autocomplete="tel" placeholder="9X XXX XXXX" style="direction:ltr;font-weight:600;letter-spacing:1px" required>
+        <div class="phone-box">
+          <span class="phone-cc">+249</span>
+          <input id="phone" inputmode="tel" autocomplete="tel" maxlength="11" placeholder="9X XXX XXXX" required>
         </div></div>
       <div class="field"><label for="pass">كلمة السر</label>
         <input class="input" id="pass" type="password" autocomplete="${tab === 'login' ? 'current-password' : 'new-password'}" placeholder="٦ حروف أو أرقام على الأقل" required></div>
@@ -576,14 +576,87 @@ Screens.auth = ({ tab = 'login' } = {}) => ({
   }
 });
 
-/* ---------- Rider: Home ---------- */
-Screens.riderHome = ({ preferred = null } = {}) => {
+
+/* ---------- Rider: Home (البداية — بدون خريطة) ---------- */
+Screens.riderHome = () => {
+  const hr = new Date().getHours();
+  const greet = hr < 12 ? 'صباح الخير' : hr < 18 ? 'مساء الخير' : 'مساء النور';
+  const first = esc((S.profile?.full_name || '').split(' ')[0]);
+  return {
+    html: `<div class="screen" style="background:var(--bg)"><div class="scroll">
+      <div style="background:var(--yellow);padding:calc(var(--safe-top) + 18px) 16px 64px;position:relative;overflow:hidden">
+        <svg aria-hidden="true" viewBox="0 0 390 200" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+          <g stroke="#F0B800" stroke-width="14" fill="none" stroke-linecap="round"><path d="M-10 60 H 400"/><path d="M-10 150 C 120 130, 260 190, 400 160"/><path d="M110 -10 V 210"/><path d="M290 -10 L 260 210"/></g></svg>
+        <div class="row gap12" style="position:relative">
+          <div class="col grow"><span style="font-size:14px;color:#3A2F00">${greet}${first ? '، ' + first : ''}</span><b style="font-size:24px">ماشي وين النهارده؟</b></div>
+          <button class="avatar" data-nav="account" aria-label="حسابي" style="border:none;background:var(--ink);color:var(--yellow);width:48px;height:48px">${S.profile?.avatar_url ? `<img src="${esc(S.profile.avatar_url)}" alt="">` : initial(S.profile?.full_name)}</button>
+        </div>
+      </div>
+      <div class="pad col gap16" style="margin-top:-46px;position:relative">
+        <button class="card row gap12" id="whereBtn" style="border:none;text-align:right;box-shadow:0 10px 30px rgba(15,26,20,.12);padding:16px;width:100%">
+          <span class="rk" style="background:var(--ink);width:48px;height:48px">${icon('search', '', 'color:var(--yellow)')}</span>
+          <span class="col grow"><b style="font-size:17px">وين ماشي؟</b><span class="small muted" id="hLoc">بنحدد موقعك…</span></span>
+          <span class="pill green" id="hNear" style="display:none"></span>
+        </button>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+          <button class="act" id="qMap" style="height:84px">${icon('map', '', 'font-size:26px')}من الخريطة</button>
+          <button class="act" id="qShare" style="height:84px">${icon('group', '', 'font-size:26px;color:#7A5A00')}طرحة</button>
+          <button class="act" id="qFav" style="height:84px">${icon('favorite', 'f', 'font-size:26px;color:#E0245E')}سواقيني</button>
+        </div>
+        <div id="hFavs"></div>
+        <div id="hRecent"></div>
+        <div class="card row gap12" style="background:#fff">
+          <span class="rk" style="background:var(--green-soft)">${icon('shield', 'f', 'color:var(--green-ink)')}</span>
+          <span class="col grow"><b style="font-size:14px">مشوارك في أمان</b><span class="small muted">سواقين موثّقين، تتبع لحظي، وزر الأمان في كل مشوار</span></span>
+        </div>
+      </div>
+    </div></div>${nav('riderHome')}`,
+    async mount(root) {
+      bindNav(root);
+      $('#whereBtn').onclick = () => go('rideMap', { focus: true });
+      $('#qMap').onclick = () => go('rideMap');
+      $('#qShare').onclick = () => go('rideMap', { shared: true, focus: true });
+      $('#qFav').onclick = () => go('favorites');
+      // آخر الوجهات
+      const { data: rt } = await sb.from('trips').select('dropoff,dropoff_address,created_at').eq('rider_id', S.user.id).eq('status', 'completed').order('created_at', { ascending: false }).limit(20);
+      const seen = new Set(), recent = [];
+      (rt || []).forEach(t => { const pt = parsePoint(t.dropoff), k = t.dropoff_address; if (pt && k && !seen.has(k) && recent.length < 4) { seen.add(k); recent.push({ name: k, lat: pt[0], lng: pt[1] }); } });
+      if ($('#hRecent') && recent.length) {
+        $('#hRecent').innerHTML = `<div class="col gap8"><b style="font-size:15px">وجهاتك الأخيرة</b>
+          <div class="card col" style="padding:4px 0">${recent.map((r, i) => `<button class="list-btn" data-rc="${i}" style="background:none;${i ? 'border-top:1px solid var(--line);border-radius:0' : ''}">
+            <span class="rk" style="width:40px;height:40px;border-radius:12px">${icon('history', '', 'font-size:20px')}</span><span class="grow" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.name)}</span>${icon('chevron_left', '', 'color:var(--ink3)')}</button>`).join('')}</div></div>`;
+        $$('[data-rc]').forEach(b => b.onclick = () => go('rideMap', { dest: recent[+b.dataset.rc] }));
+      }
+      // الموقع + الركشات القريبة + المفضلين المتاحين
+      const p = await getPos();
+      if (!$('#hLoc')) return;
+      reverse(p[0], p[1]).then(a => { if ($('#hLoc')) $('#hLoc').textContent = 'من ' + a; });
+      const [{ data: nd }, fv] = await Promise.all([
+        sb.rpc('nearby_drivers', { lat: p[0], lng: p[1], radius_m: C.SEARCH_RADIUS_M, max_results: 10 }),
+        S.favs && S.favs.size ? sb.rpc('my_favorite_drivers', { lat: p[0], lng: p[1] }).then(r => r.data || []) : Promise.resolve([])
+      ]);
+      if (!$('#hNear')) return;
+      if (nd && nd.length) { const h = $('#hNear'); h.style.display = ''; h.innerHTML = `${icon('electric_rickshaw', 'f')}${num(nd.length)} · ${num(etaMin(nd[0].distance_m))} د`; }
+      const on = (fv || []).filter(x => x.is_available);
+      if (on.length) {
+        $('#hFavs').innerHTML = `<div class="col gap8"><b style="font-size:15px" class="row gap4">${icon('favorite', 'f', 'font-size:18px;color:#E0245E')}سواقينك المتاحين هسع</b>
+          <div class="hscroll" style="padding:0">${on.map(f => `<button class="card row gap8" data-hf="${f.driver_id}" style="flex-shrink:0;border:none;padding:10px 14px;min-width:170px;text-align:right">
+            <span class="avatar" style="width:40px;height:40px">${initial(f.nickname)}</span><span class="col"><b style="font-size:14px">${esc(f.nickname)}</b><span class="small muted">${f.distance_m != null ? num(etaMin(f.distance_m)) + ' د' : 'متاح'}</span></span></button>`).join('')}</div></div>`;
+        $$('[data-hf]').forEach(b => b.onclick = () => { const f = on.find(x => x.driver_id === b.dataset.hf); go('rideMap', { preferred: { id: f.driver_id, name: f.nickname }, focus: true }); });
+      }
+    }
+  };
+};
+
+/* ---------- Rider: Map (اختيار الوجهة والطلب) ---------- */
+Screens.rideMap = ({ preferred = null, dest: initDest = null, shared: initShared = false, focus = false } = {}) => {
   let map, meMk, destMk, drivers = [], dest = null, pickup = null, pickupAddr = '', price = 0, km = 0, favOnline = [];
   const driverLayer = L.layerGroup();
   return {
     html: `<div class="screen">
       <div id="map" class="map"></div>
       <div class="map-top">
+        <button class="icon-btn float" data-back aria-label="رجوع">${icon('arrow_forward')}</button>
         <div class="loc-box">${icon('location_on', 'f', 'font-size:20px;color:var(--green)')}
           <div class="col grow"><span class="small muted">موقعك الحالي</span><b id="pickAddr" style="font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">بنحدد موقعك…</b></div></div>
         <button class="icon-btn float" id="recenter" aria-label="موقعي">${icon('my_location')}</button>
@@ -601,9 +674,9 @@ Screens.riderHome = ({ preferred = null } = {}) => {
         <div id="results" class="col gap4"></div>
         <div id="bottom"></div>
       </div>
-      </div>${nav('riderHome')}`,
+      </div>`,
     async mount(root) {
-      bindNav(root);
+      bindBack(root);
       map = makeMap($('#map'), lastPos || C.DEFAULT_CENTER);
       driverLayer.addTo(map);
       onLeave(() => { map._dead = true; try { map.stop(); map.off(); map.remove(); } catch (_) {} });
@@ -646,7 +719,7 @@ Screens.riderHome = ({ preferred = null } = {}) => {
       setTimeout(loadDrivers, 600);
       every(10000, loadDrivers);
 
-      let routeLine = null, routeMin = 0, shared = false, seats = 1, openShared = [];
+      let routeLine = null, routeMin = 0, shared = !!initShared, seats = 1, openShared = [];
       const cap = () => S.settings?.shared_capacity || 4;
       const pct = () => (S.settings?.shared_extra_pct ?? 25) / 100;
       const setDest = async (d) => {
@@ -768,6 +841,8 @@ Screens.riderHome = ({ preferred = null } = {}) => {
         };
       }
       renderBottom();
+      if (initDest && pickup) setDest(initDest);
+      else if (focus) setTimeout(() => $('#destIn') && $('#destIn').focus(), 300);
     }
   };
 };
@@ -1818,7 +1893,7 @@ Screens.favorites = () => ({
               <button class="icon-btn" data-edit="${d.driver_id}" aria-label="تعديل">${icon('edit')}</button>
             </div></div>`).join('')}`).join('')}`;
       const byId = {}; list.forEach(d => byId[d.driver_id] = d);
-      $$('[data-req]', box).forEach(b => b.onclick = () => { const d = byId[b.dataset.req]; go('riderHome', { preferred: { id: d.driver_id, name: d.nickname } }, { root: true }); });
+      $$('[data-req]', box).forEach(b => b.onclick = () => { const d = byId[b.dataset.req]; go('rideMap', { preferred: { id: d.driver_id, name: d.nickname }, focus: true }); });
       $$('[data-edit]', box).forEach(b => b.onclick = () => { const d = byId[b.dataset.edit]; openFavEditor({ driverId: d.driver_id, realName: d.full_name, plate: d.plate_number, onDone: load }); });
     };
     load();
