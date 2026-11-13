@@ -1,5 +1,5 @@
 // اختبار شامل من البداية للنهاية: راكب + سواق في متصفحين، ضد Supabase الحقيقي
-// run 17 — السواقين المفضلين
+// run 18 — شاشة بداية منفصلة عن الخريطة + حقل الهاتف
 // يشتغل في GitHub Actions (انظر .github/workflows/e2e.yml)
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -47,7 +47,20 @@ async function step(name, pages, fn) {
     await p.waitForSelector('.nav', { timeout: 25000 });
   };
 
-  await step('rider login', both, async () => { await login(rp, RIDER); await rp.waitForSelector('#destIn'); await rp.waitForTimeout(3000); await shot(rp, 'rider-home'); });
+  await step('phone field fits the screen', both, async () => {
+    await rp.goto(BASE); await rp.waitForSelector('#phone', { timeout: 20000 });
+    const r = await rp.evaluate(() => { const b = document.querySelector('.phone-box').getBoundingClientRect(); const f = document.querySelector('#pass').getBoundingClientRect(); return { bw: b.width, br: b.right, fw: f.width, w: innerWidth }; });
+    if (r.br > r.w + 1 || Math.abs(r.bw - r.fw) > 2) throw new Error(JSON.stringify(r));
+    await shot(rp, 'auth-phone');
+  });
+  await step('rider login → home dashboard (no map)', both, async () => {
+    await login(rp, RIDER); await rp.waitForSelector('#whereBtn');
+    if (await rp.locator('#map').count()) throw new Error('map on home');
+    await rp.waitForTimeout(2500); await shot(rp, 'rider-dashboard');
+  });
+  await step('open map screen from "وين ماشي؟"', both, async () => {
+    await rp.click('#whereBtn'); await rp.waitForSelector('#destIn'); await rp.waitForTimeout(3000); await shot(rp, 'rider-home');
+  });
   await step('map tiles load', both, async () => {
     const n = await rp.locator('.leaflet-tile-loaded').count();
     if (n < 2) throw new Error('tiles loaded: ' + n);
@@ -88,7 +101,7 @@ async function step(name, pages, fn) {
   });
   await step('second rider finds and joins the طرحة', both, async () => {
     await login(r2, RIDER2);
-    await r2.waitForSelector('#destIn'); await r2.waitForTimeout(2500);
+    await r2.click('#whereBtn'); await r2.waitForSelector('#destIn'); await r2.waitForTimeout(2500);
     const box = await r2.locator('#map').boundingBox();
     await r2.mouse.click(box.x + box.width * 0.7, box.y + 140);
     await r2.waitForSelector('[data-join]', { timeout: 20000 });
@@ -212,6 +225,10 @@ async function step(name, pages, fn) {
     await rp.locator('[data-s="4"]').click(); await rp.locator('[data-t]').first().click(); await rp.click('#send');
     await dp.waitForSelector('#send:not([disabled])'); await dp.click('#send');
     await rp.waitForSelector('.nav', { timeout: 15000 }); await dp.waitForSelector('.nav', { timeout: 15000 });
+  });
+  await step('home shows recent destination after trip', both, async () => {
+    await rp.waitForSelector('#hRecent [data-rc]', { timeout: 15000 });
+    await shot(rp, 'rider-dashboard-recent');
   });
   await step('history shows completed trip', both, async () => {
     await rp.click('[data-nav="history"]');
