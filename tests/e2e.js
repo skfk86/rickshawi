@@ -1,5 +1,5 @@
 // اختبار شامل من البداية للنهاية: راكب + سواق في متصفحين، ضد Supabase الحقيقي
-// run 18 — شاشة بداية منفصلة عن الخريطة + حقل الهاتف
+// run 19 — شاشة بداية منفصلة + حقل الهاتف
 // يشتغل في GitHub Actions (انظر .github/workflows/e2e.yml)
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
