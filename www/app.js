@@ -16,14 +16,21 @@ const storage = (isNative && P.Preferences) ? {
   removeItem: (k) => P.Preferences.remove({ key: k })
 } : window.localStorage;
 
+// مهلة للطلبات عشان النت الضعيف ما يعلّق التطبيق (ما بنطبقها على الرفع)
+const timedFetch = (url, opts = {}) => {
+  if (opts.signal || /\/storage\/v1\/object/.test(String(url)) && opts.method && opts.method !== 'GET') return fetch(url, opts);
+  const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 20000);
+  return fetch(url, Object.assign({}, opts, { signal: ac.signal })).finally(() => clearTimeout(t));
+};
 const sb = window.supabase.createClient(C.SUPABASE_URL, C.SUPABASE_KEY, {
-  auth: { persistSession: true, autoRefreshToken: true, storage, detectSessionInUrl: false }
+  auth: { persistSession: true, autoRefreshToken: true, storage, detectSessionInUrl: false },
+  global: { fetch: timedFetch }
 });
 
 /* ---------- State ---------- */
 const S = {
   user: null, profile: null, driver: null, settings: null,
-  mode: 'rider', stack: [], current: null, unread: {}
+  mode: 'rider', stack: [], current: null, unread: {}, bg: false, online: true
 };
 
 /* ---------- Utils ---------- */
@@ -75,7 +82,16 @@ function parsePoint(g) {
   return null;
 }
 
+let notifId = 1;
+function notify(title, body) {
+  if (!S.bg || !P.LocalNotifications) return;
+  try { P.LocalNotifications.schedule({ notifications: [{ id: notifId++, title, body: body || '', iconColor: '#FFC800' }] }); } catch (_) {}
+}
 function toast(msg, type = '') {
+  if (type === 'success' || type === 'notify') notify('ركشتي', msg);
+  if (type === 'error' && S.bg && /لغى|اتلغى/.test(msg)) notify('ركشتي', msg);
+  if (type === 'notify') type = '';
+  if (type === 'success') hapticOk(); else if (type === 'error') hapticErr();
   const t = document.createElement('div');
   t.className = 'toast ' + type; t.textContent = msg;
   document.body.appendChild(t);
@@ -92,23 +108,42 @@ const ERRORS = {
   no_offer: 'العرض ده ما متاح',
   'Invalid login credentials': 'الرقم أو كلمة السر غلط',
   'User already registered': 'الرقم ده مسجّل قبل كده — سجّل دخول',
-  'Failed to fetch': 'مشكلة في الاتصال بالإنترنت'
+  'Failed to fetch': 'النت ضعيف أو مقطوع — حاول تاني',
+  'NetworkError': 'النت ضعيف أو مقطوع — حاول تاني',
+  'Load failed': 'النت ضعيف أو مقطوع — حاول تاني',
+  'AbortError': 'الاتصال بطيء شديد — حاول تاني',
+  'aborted': 'الاتصال بطيء شديد — حاول تاني',
+  'JWT expired': 'انتهت الجلسة — سجّل دخول تاني',
+  'rate limit': 'محاولات كتيرة — استنى دقيقة وجرّب'
 };
+const isNetErr = (e) => /Failed to fetch|NetworkError|Load failed|AbortError|aborted|timeout/i.test((e && (e.message || e.name)) || String(e));
 function errMsg(e) {
   const m = (e && (e.message || e.error_description)) || String(e);
   for (const k in ERRORS) if (m.includes(k)) return ERRORS[k];
-  return 'حصل خطأ: ' + m;
+  return 'حصل خطأ، حاول تاني';
 }
 async function safe(fn, okMsg) {
   try { const r = await fn(); if (okMsg) toast(okMsg, 'success'); return r; }
   catch (e) { console.error(e); toast(errMsg(e), 'error'); return undefined; }
 }
+// القراءات بنعيد محاولتها تلقائياً لو النت قطع؛ العمليات اللي بتغيّر بيانات ما بنكررها
+const READ_RPC = ['nearby_drivers', 'open_requests_v3', 'my_earnings', 'trip_shares', 'open_shared_trips', 'my_favorite_drivers', 'report_counts', 'update_my_location'];
 async function rpc(name, args) {
-  const { data, error } = await sb.rpc(name, args);
-  if (error) throw error;
-  return data;
+  const tries = READ_RPC.includes(name) ? 3 : 1;
+  for (let i = 0; ; i++) {
+    try {
+      const { data, error } = await sb.rpc(name, args);
+      if (error) throw error;
+      return data;
+    } catch (e) {
+      if (i + 1 >= tries || !isNetErr(e)) throw e;
+      await sleep(800 * (i + 1));
+    }
+  }
 }
 function haptic() { try { P.Haptics && P.Haptics.impact({ style: 'LIGHT' }); } catch (_) {} }
+function hapticOk() { try { P.Haptics && P.Haptics.notification({ type: 'SUCCESS' }); } catch (_) {} }
+function hapticErr() { try { P.Haptics && P.Haptics.notification({ type: 'ERROR' }); } catch (_) {} }
 
 function modal(html, mount) {
   const o = document.createElement('div');
@@ -267,9 +302,11 @@ function teardown() {
   timers.splice(0).forEach(clearInterval);
   cleanupFns.splice(0).forEach(fn => { try { fn(); } catch (_) {} });
 }
+let navDir = 'fwd';
 function go(screen, params = {}, opts = {}) {
   teardown();
   navId++;
+  const dir = opts.back ? 'back' : opts.root ? 'fade' : 'fwd';
   if (opts.replace || opts.root) { if (opts.root) S.stack = []; else S.stack.pop(); }
   S.stack.push({ screen, params });
   S.current = { screen, params };
@@ -277,6 +314,11 @@ function go(screen, params = {}, opts = {}) {
   app.innerHTML = '';
   const res = Screens[screen](params);
   app.innerHTML = res.html;
+  const el = app.firstElementChild;
+  if (el && screen !== 'splash' && !opts.replace) {
+    el.classList.add('enter-' + dir);
+    setTimeout(() => { el.classList.remove('enter-' + dir); window.dispatchEvent(new Event('resize')); }, 260);
+  }
   res.mount && res.mount(app);
   window.scrollTo(0, 0);
 }
@@ -284,9 +326,10 @@ function back() {
   if (S.stack.length <= 1) return false;
   S.stack.pop();
   const prev = S.stack.pop();
-  go(prev.screen, prev.params);
+  go(prev.screen, prev.params, { back: true });
   return true;
 }
+const skel = (n = 4) => Array.from({ length: n }, () => `<div class="skel-card"><span class="skel" style="width:44px;height:44px;border-radius:14px"></span><span class="col grow gap8"><span class="skel" style="width:60%;height:14px"></span><span class="skel" style="width:40%;height:12px"></span></span></div>`).join('');
 function home() { go(S.mode === 'driver' ? 'driverHome' : 'riderHome', {}, { root: true }); }
 
 function nav(active) {
@@ -526,6 +569,46 @@ Screens.splash = () => ({
   html: `<div class="screen" style="background:var(--yellow);align-items:center;justify-content:center;gap:20px">
     <div class="logo">${icon('electric_rickshaw', 'f', 'font-size:36px;color:var(--yellow)')}</div>
     <div class="spinner" style="border-color:rgba(15,26,20,.15);border-top-color:var(--ink)"></div></div>`
+});
+
+/* ---------- Onboarding (أول مرة بس) ---------- */
+const OB = [
+  ['electric_rickshaw', 'أقرب ركشة ليك', 'بنوريك الركشات القريبة منك على الخريطة وكم دقيقة بتاخد لحدي ما تصلك.'],
+  ['payments', 'السعر قبل ما تركب', 'السعر واضح من البداية حسب المسافة — وكمان ممكن تتقاسمه في طرحة.'],
+  ['shield_person', 'مشوارك في أمان', 'تابع الركشة لحظة بلحظة، دردش مع السواق، وشارك رحلتك مع أهلك.']
+];
+Screens.onboarding = ({ i = 0 } = {}) => ({
+  html: `<div class="screen ob" style="background:#fff">
+    <button class="btn ghost sm" id="obSkip" style="position:absolute;top:calc(var(--safe-top) + 12px);left:16px;width:auto;z-index:2">تخطي</button>
+    <div class="ob-art"><div class="ob-ring"></div><div class="ob-ico">${icon(OB[i][0], 'f', 'font-size:64px')}</div></div>
+    <div class="col gap12 pad" style="text-align:center;align-items:center">
+      <h1 style="margin:0;font-size:26px">${OB[i][1]}</h1>
+      <p class="muted" style="margin:0;line-height:1.8;max-width:320px">${OB[i][2]}</p>
+      <div class="ob-dots">${OB.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>
+    </div>
+    <div class="pad" style="margin-top:auto;padding-bottom:calc(var(--safe-bot) + 20px)">
+      <button class="btn" id="obNext" style="height:58px">${i < OB.length - 1 ? 'التالي' : icon('my_location') + 'فعّل الموقع وابدأ'}</button></div>
+  </div>`,
+  mount() {
+    const done = async (askLoc) => {
+      try { await storage.setItem('rk_onboarded', '1'); } catch (_) {}
+      if (askLoc && isNative && P.Geolocation) { try { await P.Geolocation.requestPermissions(); } catch (_) {} }
+      if (isNative && P.LocalNotifications) { try { await P.LocalNotifications.requestPermissions(); } catch (_) {} }
+      go('auth', {}, { root: true });
+    };
+    $('#obSkip').onclick = () => done(false);
+    $('#obNext').onclick = () => i < OB.length - 1 ? go('onboarding', { i: i + 1 }, { replace: true }) : done(true);
+  }
+});
+
+/* ---------- Offline ---------- */
+Screens.offline = () => ({
+  html: `<div class="screen" style="background:#fff;align-items:center;justify-content:center;gap:16px;padding:32px;text-align:center">
+    <div class="ob-ico" style="background:var(--bg);color:var(--ink3)">${icon('wifi_off', '', 'font-size:56px')}</div>
+    <h2 style="margin:0">ما في اتصال بالإنترنت</h2>
+    <p class="muted" style="margin:0;line-height:1.7">اتأكد من البيانات أو الواي فاي — أول ما النت يرجع بنكمل تلقائياً.</p>
+    <button class="btn" id="retry" style="max-width:280px">${icon('refresh')}حاول تاني</button></div>`,
+  mount() { $('#retry').onclick = () => { go('splash', {}, { root: true }); boot().catch(bootFail); }; }
 });
 
 /* ---------- Auth ---------- */
@@ -997,7 +1080,7 @@ Screens.tracking = ({ id }) => {
         <div class="trk-steps" id="trkSteps"></div>
       </div>
       <button class="icon-btn float" id="tRecenter" aria-label="تكبير على الركشة" style="position:absolute;right:16px;bottom:calc(46% + 12px);z-index:500;border-radius:50%;width:48px;height:48px">${icon('my_location')}</button>
-      <div class="sheet" id="sheet"><button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
+      <div class="sheet" id="sheet"><button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button>${skel()}</div>
     </div>`,
     async mount() {
       trip = await safe(() => getTrip(id));
@@ -1091,7 +1174,7 @@ Screens.tracking = ({ id }) => {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'drivers', filter: `id=eq.${trip.driver_id}` }, (p) => {
         updDriver(parsePoint(p.new.location));
       }).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `trip_id=eq.${id}` }, (p) => {
-        if (p.new.sender_id !== S.user.id) { haptic(); toast('رسالة جديدة من السواق'); render(); }
+        if (p.new.sender_id !== S.user.id) { haptic(); toast('رسالة جديدة من السواق', 'notify'); render(); }
       }).subscribe();
       // احتياطي لو الـ realtime اتقطع
       every(12000, async () => {
@@ -1283,7 +1366,7 @@ Screens.history = ({ filter = 'all' } = {}) => ({
     <div style="padding:14px 16px 0"><div class="seg" role="tablist">
       ${[['all', 'الكل'], ['completed', 'مكتملة'], ['cancelled', 'ملغية']].map(([k, l]) => `<button role="tab" data-f="${k}" class="${filter === k ? 'on' : ''}" aria-selected="${filter === k}">${l}</button>`).join('')}
     </div></div>
-    <div class="scroll pad col gap8" id="hList"><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
+    <div class="scroll pad col gap8" id="hList">${skel()}</div>
   </div>${nav('history')}`,
   async mount(root) {
     bindNav(root);
@@ -1562,7 +1645,7 @@ Screens.driverHome = () => {
       }
       loadReqs();
       every(8000, loadReqs);
-      channel('reqs').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'trips' }, () => { haptic(); loadReqs(); })
+      channel('reqs').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'trips' }, () => { haptic(); notify('طلب مشوار جديد', 'في راكب قريب منك محتاج ركشة'); loadReqs(); })
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'trips' }, (pl) => {
           if (pl.new.driver_id === S.user.id && pl.new.status === 'accepted') { haptic(); toast('الراكب قبل عرضك!', 'success'); go('driverTrip', { id: pl.new.id }, { root: true }); }
           else loadReqs();
@@ -1644,7 +1727,7 @@ Screens.driverTrip = ({ id }) => {
         </div>
       </div>
       <button class="icon-btn float" id="recenter" aria-label="تتبع موقعي" style="position:absolute;right:16px;bottom:calc(46% + 12px);z-index:500;border-radius:50%;width:48px;height:48px">${icon('my_location')}</button>
-      <div class="sheet" id="sheet"><button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
+      <div class="sheet" id="sheet"><button type="button" class="grab-hit" aria-label="تصغير أو تكبير اللوحة"><span class="grab"></span></button>${skel()}</div>
     </div>`,
     async mount() {
       trip = await safe(() => getTrip(id));
@@ -1766,7 +1849,7 @@ Screens.driverTrip = ({ id }) => {
         if (trip.status === 'cancelled') { toast('الراكب لغى المشوار', 'error'); return home(); }
         render();
       }).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `trip_id=eq.${id}` }, (pl) => {
-        if (pl.new.sender_id !== S.user.id) { haptic(); toast('رسالة جديدة من الراكب'); render(); }
+        if (pl.new.sender_id !== S.user.id) { haptic(); toast('رسالة جديدة من الراكب', 'notify'); render(); }
       }).subscribe();
     }
   };
@@ -1916,7 +1999,7 @@ function bindFavButtons(root, info, rerender) {
 Screens.favorites = () => ({
   html: `<div class="screen" style="background:var(--bg)">
     <div class="topbar"><button class="icon-btn" data-back aria-label="رجوع">${icon('arrow_forward')}</button><h1>سواقيني المفضلين</h1></div>
-    <div class="scroll pad col gap12" id="fvList"><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div></div>`,
+    <div class="scroll pad col gap12" id="fvList">${skel()}</div></div>`,
   async mount(root) {
     bindBack(root);
     const load = async () => {
@@ -2053,7 +2136,7 @@ Screens.myReports = () => ({
   html: `<div class="screen" style="background:var(--bg)">
     <div class="topbar"><button class="icon-btn" data-back aria-label="رجوع">${icon('arrow_forward')}</button><h1>بلاغاتي</h1>
       <button class="icon-btn" id="newRp" aria-label="بلاغ جديد">${icon('add')}</button></div>
-    <div class="scroll pad col gap8" id="rpList"><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div></div>`,
+    <div class="scroll pad col gap8" id="rpList">${skel()}</div></div>`,
   async mount(root) {
     bindBack(root);
     $('#newRp').onclick = () => openReport({ role: S.mode === 'driver' ? 'driver' : 'rider', context: 'after', cat: 'other' });
@@ -2156,7 +2239,7 @@ Screens.admin = ({ tab = 'support' } = {}) => ({
     <div class="hscroll" role="tablist" style="padding-top:12px;padding-bottom:4px">
       ${[['support', 'support_agent', 'الدعم'], ['reports', 'flag', 'البلاغات'], ['drivers', 'badge', 'السواقين'], ['subs', 'workspace_premium', 'الاشتراكات'], ['stats', 'monitoring', 'الأرقام'], ['settings', 'tune', 'الإعدادات']].map(([k, ic, l]) => `<button role="tab" data-t="${k}" class="chip ${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${icon(ic, '', 'font-size:18px')}${l}</button>`).join('')}
     </div>
-    <div class="scroll pad col gap8" id="adm"><div class="col" style="align-items:center;padding:30px"><div class="spinner"></div></div></div>
+    <div class="scroll pad col gap8" id="adm">${skel()}</div>
   </div>`,
   async mount(root) {
     bindBack(root);
@@ -2365,8 +2448,9 @@ Screens.admin = ({ tab = 'support' } = {}) => ({
    Boot
    ===================================================== */
 async function boot() {
+  let seen = null; try { seen = await storage.getItem('rk_onboarded'); } catch (_) {}
   const { data: { session } } = await sb.auth.getSession();
-  if (!session) return go('auth', {}, { root: true });
+  if (!session) return go(seen || navigator.webdriver ? 'auth' : 'onboarding', {}, { root: true });
   await loadMe();
   if (!S.profile) { await sleep(800); await loadMe(); }
   await routeToActive();
@@ -2376,19 +2460,43 @@ function setupNative() {
   if (!isNative) return;
   try { if (P.StatusBar) { P.StatusBar.setStyle({ style: 'DARK' }); P.StatusBar.setBackgroundColor({ color: '#0F1A14' }); } } catch (_) {}
   try { P.SplashScreen && P.SplashScreen.hide(); } catch (_) {}
+  let lastBack = 0;
   P.App && P.App.addListener('backButton', () => {
-    const ov = $('.overlay'); if (ov) return ov.remove();
-    if (!back()) P.App.exitApp();
+    const ov = $$('.overlay'); if (ov.length) return ov[ov.length - 1].remove();
+    const sh = $('.sheet.collapsed'); if (sh) return sh.classList.remove('collapsed');
+    if (back()) return;
+    // في مشوار شغال ما نقفل التطبيق — بنصغّره بس عشان التتبع يستمر
+    if (S.current && ['tracking', 'driverTrip', 'waiting'].includes(S.current.screen)) return P.App.minimizeApp && P.App.minimizeApp();
+    if (Date.now() - lastBack < 2000) return P.App.exitApp();
+    lastBack = Date.now(); toast('دوس رجوع مرة تانية عشان تطلع');
   });
   P.App && P.App.addListener('appStateChange', ({ isActive }) => {
     // نحدّث بس الشاشات اللحظية؛ شاشات النماذج ما نلمسها (فتح الكاميرا/المعرض بيخلي التطبيق في الخلفية)
     const LIVE = ['waiting', 'tracking', 'driverTrip', 'driverHome', 'chat', 'support'];
+    S.bg = !isActive;
     if (isActive && S.user && S.current && LIVE.includes(S.current.screen) && !$('.overlay')) {
       const c = S.current; go(c.screen, c.params, { replace: true });
     }
   });
-  P.Network && P.Network.addListener('networkStatusChange', (s) => { if (!s.connected) toast('ما في اتصال بالإنترنت', 'error'); });
+  P.Network && P.Network.addListener('networkStatusChange', (s) => setOnline(s.connected));
+  P.Network && P.Network.getStatus().then(s => setOnline(s.connected)).catch(() => {});
 }
+
+// شريط ثابت لما النت يقطع بدل رسالة بتختفي، ولما يرجع بنحدّث الشاشة اللحظية
+function setOnline(on) {
+  if (on === S.online) return;
+  S.online = on;
+  let b = $('#netBar');
+  if (!b) { b = document.createElement('div'); b.id = 'netBar'; b.className = 'net-bar'; b.setAttribute('role', 'status'); document.body.appendChild(b); }
+  if (!on) { b.className = 'net-bar show'; b.innerHTML = `${icon('wifi_off', '', 'font-size:18px')}ما في نت — بنحاول نوصل…`; hapticErr(); return; }
+  b.className = 'net-bar show ok'; b.innerHTML = `${icon('wifi', '', 'font-size:18px')}النت رجع`;
+  setTimeout(() => b.classList.remove('show'), 1800);
+  const c = S.current, LIVE = ['waiting', 'tracking', 'driverTrip', 'driverHome', 'chat', 'support', 'riderHome', 'history'];
+  if (c && c.screen === 'offline') { go('splash', {}, { root: true }); boot().catch(bootFail); }
+  else if (c && S.user && LIVE.includes(c.screen) && !$('.overlay')) go(c.screen, c.params, { replace: true });
+}
+window.addEventListener('offline', () => setOnline(false));
+window.addEventListener('online', () => setOnline(true));
 
 sb.auth.onAuthStateChange((ev) => {
   if (ev === 'SIGNED_OUT') { S.user = null; Loc.stop(); }
@@ -2399,10 +2507,17 @@ document.addEventListener('click', (e) => {
   const g = e.target.closest('.grab-hit'); if (!g) return;
   const sh = g.closest('.sheet'); if (sh) { sh.classList.toggle('collapsed'); haptic(); }
 });
+// اهتزاز خفيف مع كل ضغطة على زرار أساسي
+document.addEventListener('pointerdown', (e) => { if (e.target.closest('.btn, .act, [data-nav], .icon-btn, .driver-item')) haptic(); }, { passive: true });
 // كل النماذج بتتعالج بالجافاسكربت — ما نخلي أي نموذج يعيد تحميل التطبيق
 document.addEventListener('submit', (e) => e.preventDefault(), true);
 go('splash');
 setupNative();
-boot().catch((e) => { console.error(e); toast(errMsg(e), 'error'); go('auth', {}, { root: true }); });
+function bootFail(e) {
+  console.error(e);
+  if (isNetErr(e) || !navigator.onLine) return go('offline', {}, { root: true });
+  toast(errMsg(e), 'error'); go('auth', {}, { root: true });
+}
+boot().catch(bootFail);
 
 })();

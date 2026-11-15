@@ -166,6 +166,31 @@ a{color:var(--ink)}
 .empty .ms{font-size:48px;color:#B8C0BB}
 .toast{position:fixed;bottom:calc(var(--safe-bot) + 90px);left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;padding:12px 20px;border-radius:16px;font-size:14px;opacity:0;transition:all .25s;z-index:9999;max-width:88%;text-align:center}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+/* انتقالات الشاشات */
+.enter-fwd{animation:inFwd .24s cubic-bezier(.2,.8,.2,1)}
+.enter-back{animation:inBack .24s cubic-bezier(.2,.8,.2,1)}
+.enter-fade{animation:inFade .22s ease-out}
+@keyframes inFwd{from{opacity:0;transform:translateX(-24px)}to{opacity:1;transform:none}}
+@keyframes inBack{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
+@keyframes inFade{from{opacity:0}to{opacity:1}}
+.overlay .modal{animation:sheetUp .26s cubic-bezier(.2,.8,.2,1)}
+@keyframes sheetUp{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
+.btn,.act,.icon-btn,.driver-item,[data-nav]{transition:transform .12s ease, background .15s}
+.btn:active,.act:active,.icon-btn:active,.driver-item:active{transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){.enter-fwd,.enter-back,.enter-fade,.overlay .modal,.veh-halo{animation:none}}
+/* هياكل التحميل */
+.skel{display:block;background:linear-gradient(90deg,#EEF1EF 25%,#F7F9F8 50%,#EEF1EF 75%);background-size:200% 100%;animation:shim 1.2s infinite linear;border-radius:8px}
+.skel-card{display:flex;gap:12px;align-items:center;padding:14px;border:1px solid var(--line);border-radius:18px;background:#fff;flex-shrink:0}
+@keyframes shim{from{background-position:200% 0}to{background-position:-200% 0}}
+/* شريط النت */
+.net-bar{position:fixed;top:0;left:0;right:0;z-index:10000;display:flex;align-items:center;justify-content:center;gap:8px;padding:calc(var(--safe-top) + 8px) 16px 8px;background:var(--red);color:#fff;font-size:13px;font-weight:600;transform:translateY(-100%);transition:transform .25s}
+.net-bar.show{transform:none}.net-bar.ok{background:var(--green-ink)}
+/* شاشات التعريف */
+.ob{justify-content:flex-start}
+.ob-art{position:relative;height:46vh;display:flex;align-items:center;justify-content:center;background:var(--yellow);border-radius:0 0 40px 40px;margin-bottom:28px;overflow:hidden}
+.ob-ring{position:absolute;width:300px;height:300px;border-radius:50%;border:28px solid rgba(15,26,20,.06)}
+.ob-ico{width:128px;height:128px;border-radius:40px;background:var(--ink);color:var(--yellow);display:flex;align-items:center;justify-content:center;box-shadow:0 20px 40px rgba(15,26,20,.25);animation:inFade .3s}
+.ob-dots{display:flex;gap:6px;margin-top:8px}.ob-dots i{width:8px;height:8px;border-radius:8px;background:var(--line);transition:width .2s}.ob-dots i.on{width:24px;background:var(--ink)}
 .toast.error{background:var(--red)}.toast.success{background:var(--green-ink)}
 .overlay{position:fixed;inset:0;background:rgba(15,26,20,.45);z-index:9000;display:flex;align-items:flex-end}
 .modal{background:#fff;border-radius:28px 28px 0 0;width:100%;padding:20px 16px calc(var(--safe-bot) + 20px);display:flex;flex-direction:column;gap:14px;max-height:85%;overflow-y:auto}

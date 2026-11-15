@@ -1,5 +1,5 @@
 // اختبار شامل من البداية للنهاية: راكب + سواق في متصفحين، ضد Supabase الحقيقي
-// run design-v2
+// run ux-pro
 // يشتغل في GitHub Actions (انظر .github/workflows/e2e.yml)
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -292,6 +292,32 @@ async function step(name, pages, fn) {
     await dp.click('[data-nav="earnings"]');
     await dp.waitForSelector('#renew, #sub .card', { timeout: 15000 });
     await shot(dp, 'driver-earnings');
+  });
+
+  await step('history loads with skeleton then list', both, async () => {
+    await rp.click('[data-nav="history"]');
+    await rp.waitForFunction(() => !document.querySelector('#hList .skel-card'), null, { timeout: 15000 });
+  });
+
+  await step('offline bar shows and hides', both, async () => {
+    await R.page.context().setOffline(true);
+    await rp.waitForSelector('#netBar.show', { timeout: 8000 });
+    await shot(rp, 'offline-bar');
+    await R.page.context().setOffline(false);
+    await rp.waitForSelector('#netBar.ok', { timeout: 8000 });
+  });
+
+  await step('first-launch onboarding (fresh device)', both, async () => {
+    const c = await browser.newContext({ ...devices['Pixel 7'], locale: 'ar' });
+    await c.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
+    const p = await c.newPage(); await p.goto(BASE);
+    await p.waitForSelector('#obNext', { timeout: 15000 });
+    await shot(p, 'onboarding-1');
+    await p.click('#obNext'); await p.click('#obNext');
+    await shot(p, 'onboarding-3');
+    await p.click('#obNext');
+    await p.waitForSelector('#phone', { timeout: 15000 });
+    await c.close();
   });
 
   await browser.close();
