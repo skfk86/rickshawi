@@ -1,5 +1,5 @@
 // اختبار شامل من البداية للنهاية: راكب + سواق في متصفحين، ضد Supabase الحقيقي
-// run ux-pro
+// run ux-pro-2
 // يشتغل في GitHub Actions (انظر .github/workflows/e2e.yml)
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -295,6 +295,7 @@ async function step(name, pages, fn) {
   });
 
   await step('history loads with skeleton then list', both, async () => {
+    await rp.goto(BASE); await rp.waitForSelector('[data-nav="history"]', { timeout: 20000 });
     await rp.click('[data-nav="history"]');
     await rp.waitForFunction(() => !document.querySelector('#hList .skel-card'), null, { timeout: 15000 });
   });
